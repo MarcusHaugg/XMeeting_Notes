@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' file:; img-src 'self' data:">
+  <title>XMeeting Notes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">XMeeting Notes</div>
+      <button id="new-meeting" class="new-btn"></button>
+      <input id="search" class="search" type="search" placeholder="Buscar reuniões" aria-label="Buscar reuniões">
+      <nav id="list" class="list" aria-label="Reuniões"></nav>
+      <button id="open-settings" class="side-link">Configurações</button>
+    </aside>
+    <main id="main" class="main"></main>
+  </div>
+
+  <div id="rec-bar" class="rec-bar" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <dialog id="settings" class="dialog">
+    <form method="dialog">
+      <h2>Configurações</h2>
+      <label class="field">
+        <span>Qualidade da transcrição</span>
+        <select id="set-model"></select>
+      </label>
+      <p class="hint"><strong>Máxima precisão</strong> acerta bem mais palavras difíceis; 1 h de reunião leva cerca de
+        70 min para transcrever (baixa 1 GB na primeira vez). <strong>Rápido</strong> leva cerca de 40 min, mas erra mais.</p>
+      <label class="field">
+        <span>Idioma das reuniões</span>
+        <select id="set-language"></select>
+      </label>
+      <p class="hint">Fixar o idioma evita que o Whisper confunda idiomas em falas curtas.</p>
+      <div class="dialog-actions">
+        <button type="button" id="open-data" class="btn">Abrir pasta dos arquivos</button>
+        <span class="spacer"></span>
+        <button value="close" class="btn primary">Fechar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="recorder.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

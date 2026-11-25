@@ -1,0 +1,107 @@
+{
+  "name": "xmeeting-notes",
+  "productName": "XMeeting Notes",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Gravador de reuniões gratuito e local: grava microfone + áudio do sistema e transcreve a reunião inteira no próprio computador.",
+  "author": {
+    "name": "XMeeting Notes",
+    "email": "noreply@xmeetingnotes.app"
+  },
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest=30",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.xmeetingnotes",
+    "productName": "XMeeting Notes",
+    "artifactName": "XMeeting-Notes-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "renderer/**",
+      "package.json",
+      "!node_modules/onnxruntime-web/**"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/onnxruntime-node/**",
+      "node_modules/sharp/**",
+      "node_modules/@img/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,linux}/**",
+        "!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "XMeeting Notes",
+      "runAfterFinish": true
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "14.2",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "O XMeeting Notes usa o microfone para gravar a sua voz nas reuniões.",
+        "NSAudioCaptureUsageDescription": "O XMeeting Notes grava o áudio do sistema para capturar a voz dos outros participantes da reunião."
+      },
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v*/{win32,linux}/**"
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "Office",
+      "maintainer": "XMeeting Notes <noreply@xmeetingnotes.app>",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v*/{win32,darwin}/**",
+        "!node_modules/onnxruntime-node/bin/napi-v*/linux/arm64/**"
+      ]
+    }
+  }
+}
