@@ -32,6 +32,9 @@ jobs:
 
       - name: Instalar dependências
         run: npm ci
+        env:
+          # O app transcreve no processador; sem isto o Linux baixa ~550 MB de binários CUDA (NVIDIA) inúteis.
+          ONNXRUNTIME_NODE_INSTALL: skip
 
       - name: Gerar instalador
         run: npx electron-builder ${{ matrix.target }} --publish never
