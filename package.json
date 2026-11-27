@@ -1,7 +1,7 @@
 {
   "name": "xmeeting-notes",
   "productName": "XMeeting Notes",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Gravador de reuniões: grava microfone + áudio do sistema, transcreve no computador (ou com Gemini/OpenAI) e resume com a IA escolhida; login Google e Google Agenda.",
   "author": {
