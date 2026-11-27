@@ -122,7 +122,7 @@ export function clearCalendarCache() {
 }
 
 /** Só para capturas de tela no desenvolvimento: compromissos de exemplo, sem chamar o Google. */
-export function useFakeCalendarForScreenshots() {
+export function useFakeCalendarForScreenshots({ meetingNow = false } = {}) {
   const at = (dayOffset, h, m) => {
     const d = new Date();
     d.setDate(d.getDate() + dayOffset);
@@ -135,7 +135,12 @@ export function useFakeCalendarForScreenshots() {
     { id: 'f2', title: 'Proposta para o cliente Alfa', start: at(0, 14, 0), end: at(0, 15, 0), allDay: false, link: { kind: 'teams', url: 'https://teams.microsoft.com/l/meetup-join/x' }, attendees: people('Você', 'Diego Alfa') },
     { id: 'f3', title: 'Almoço', start: at(0, 12, 0), end: at(0, 13, 0), allDay: false, link: null, attendees: [] },
     { id: 'f4', title: 'Revisão de custos', start: at(1, 10, 0), end: at(1, 11, 0), allDay: false, link: { kind: 'zoom', url: 'https://empresa.zoom.us/j/123' }, attendees: people('Você', 'Eva Rocha', 'Fábio Melo') },
-  ].sort((a, b) => a.start.localeCompare(b.start));
+  ];
+  if (meetingNow) {
+    const now = Date.now();
+    fake.push({ id: 'f0', title: 'Reunião de teste agora', start: new Date(now + 20_000).toISOString(), end: new Date(now + 30 * 60_000).toISOString(), allDay: false, link: { kind: 'meet', url: 'https://meet.google.com/xyz-test' }, attendees: people('Você', 'Ana Souza') });
+  }
+  fake.sort((a, b) => a.start.localeCompare(b.start));
 }
 
 // ---------------------------------------------------------------- aviso de início

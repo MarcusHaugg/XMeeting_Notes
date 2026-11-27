@@ -59,6 +59,10 @@ desligar no menu do ícone ou em Configurações).
 - **Ollama**: instale pelo [ollama.com](https://ollama.com/download) e baixe um modelo (ex.:
   `ollama pull qwen3`). O app encontra os modelos instalados sozinho.
 - **Idioma** das reuniões e **avisos** de reuniões da agenda.
+- **Começar a gravar sozinho** (desligado por padrão): quando uma reunião da Google Agenda com link de
+  chamada ou com 2 ou mais participantes começa, o app grava sem clique, sem tirar o foco da tela, e
+  mostra uma notificação. Parar continua manual. Precisa do app aberto (ícone da barra) e, no Mac, das
+  permissões de microfone e áudio do sistema já dadas numa gravação anterior.
 
 ## Como funciona
 

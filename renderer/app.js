@@ -697,6 +697,7 @@
       .join('');
     $('#set-language').value = s.language;
     $('#set-notify').checked = Boolean(s.notifyMeetings);
+    $('#set-autorecord').checked = Boolean(s.autoRecordMeetings);
     api.settings.loginItem().then(({ available, enabled }) => {
       $('#set-login-row').hidden = !available; // só no app instalado (Windows e macOS)
       $('#set-login').checked = enabled;
@@ -937,6 +938,7 @@
   $('#set-update').addEventListener('click', updateAction);
   $('#set-language').addEventListener('change', (e) => changeSetting({ language: e.target.value }));
   $('#set-notify').addEventListener('change', (e) => changeSetting({ notifyMeetings: e.target.checked }));
+  $('#set-autorecord').addEventListener('change', (e) => changeSetting({ autoRecordMeetings: e.target.checked }));
   $('#set-login').addEventListener('change', async (e) => {
     const { enabled } = await api.settings.setLoginItem(e.target.checked);
     e.target.checked = enabled;

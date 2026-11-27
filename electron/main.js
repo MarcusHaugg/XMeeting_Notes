@@ -88,9 +88,12 @@ async function start() {
   if (app.commandLine.hasSwitch('screenshot') && app.commandLine.hasSwitch('fake-user')) {
     const calendar = !app.commandLine.hasSwitch('fake-no-calendar');
     useFakeUserForScreenshots(app.commandLine.getSwitchValue('fake-user'), { calendar });
-    if (calendar) useFakeCalendarForScreenshots();
+    if (calendar) useFakeCalendarForScreenshots({ meetingNow: app.commandLine.hasSwitch('auto-record-test') });
   }
-  startMeetingWatcher({ enabled: () => getSettings().notifyMeetings && !recording, onStarting: announceMeeting });
+  startMeetingWatcher({
+    enabled: () => (getSettings().notifyMeetings || getSettings().autoRecordMeetings) && !recording,
+    onStarting: announceMeeting,
+  });
   summarizer = new Summarizer({ notify });
   transcriber = new Transcriber({
     notify,
@@ -391,12 +394,26 @@ async function findEvent(eventId) {
   return events.find((e) => e.id === eventId) ?? null;
 }
 
-// Aviso do sistema quando uma reunião da agenda começa; clicar nele abre o app e começa a gravar.
-function announceMeeting(ev) {
-  if (!Notification.isSupported()) return;
-  const n = new Notification({ title: 'Sua reunião está começando', body: `${ev.title}\nClique para gravar no XMeeting.` });
-  n.on('click', () => recordFromOutside(ev.id));
-  n.show();
+// Uma reunião da agenda começou. Com "gravar sozinho" ligado, começa a gravar sem tirar o foco da
+// tela (a pessoa pode estar entrando na chamada); parar continua sendo manual. Senão, só avisa:
+// clicar no aviso abre o app e começa a gravar.
+async function announceMeeting(ev) {
+  const notify = (title, body, onClick) => {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title, body });
+    if (onClick) n.on('click', onClick);
+    n.show();
+  };
+  if (getSettings().autoRecordMeetings && currentUser() && !recording) {
+    await runInWindow(`window.__record(${JSON.stringify(ev.id)})`);
+    if (recording) {
+      notify(`Gravando: ${ev.title}`, 'O XMeeting começou a gravar sozinho. Avise os participantes. Clique para abrir ou parar.', focusWindow);
+      return;
+    }
+    notify('Não consegui começar a gravar', `${ev.title}\nClique para tentar de novo.`, () => recordFromOutside(ev.id));
+    return;
+  }
+  if (getSettings().notifyMeetings) notify('Sua reunião está começando', `${ev.title}\nClique para gravar no XMeeting.`, () => recordFromOutside(ev.id));
 }
 
 // ---------------------------------------------------------------- gravação

@@ -9,6 +9,8 @@
 //                    (@gmail.com = conta pessoal; outro domínio = conta empresarial), com uma
 //                    agenda de exemplo; --fake-no-calendar mostra a agenda ainda não conectada
 //   --check-update   com --screenshot: procura atualização antes das capturas (só no app empacotado)
+//   --auto-record-test com --screenshot e --fake-user: liga "gravar sozinho" e confere que a reunião
+//                    falsa que começa em 20 s é gravada sem clique; depois para
 //   --keep           não apaga a reunião de teste no final
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,6 +44,31 @@ export async function run({ app, win, transcriber, setQuitting }) {
     fs.writeFileSync(path.join(shotDir, name), image.toPNG());
     console.log(`[dev] captura de tela: ${name}`);
   };
+
+  if (has('auto-record-test')) {
+    const { updateSettings } = await import('./settings.js');
+    updateSettings({ autoRecordMeetings: true });
+    win.hide(); // como no dia a dia: app só no ícone da barra, janela fechada
+    console.log('[dev] gravar sozinho ligado, janela escondida; esperando a reunião começar...');
+    const started = Date.now();
+    let rec = null;
+    while (!rec && Date.now() - started < 90_000) {
+      await sleep(1000);
+      rec = (await store.list()).find((m) => m.status === 'recording');
+    }
+    if (!rec) throw new Error('não começou a gravar sozinho');
+    console.log(`[dev] começou sozinho em ${((Date.now() - started) / 1000).toFixed(0)}s: "${rec.title}" janela visível=${win.isVisible()}`);
+    await sleep(4000);
+    win.show();
+    await shot('gravando-sozinho.png');
+    await win.webContents.executeJavaScript('window.__stop()', true);
+    const meta = await waitFor(rec.id, (m) => m && m.status !== 'recording' && m.status !== 'finalizing');
+    console.log(`[dev] parado: status=${meta.status} duração=${meta.durationSec}s evento=${meta.calendarEvent?.title ?? '-'} participantes=${(meta.calendarEvent?.attendees ?? []).length}`);
+    if (!has('keep')) await store.remove(rec.id);
+    setQuitting();
+    app.exit(0);
+    return;
+  }
 
   if (!demo && !has('selftest')) {
     if (has('check-update')) {

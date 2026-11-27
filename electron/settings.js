@@ -17,6 +17,7 @@ export const SUMMARIZER_KEYS = ['auto', 'gemini', 'openai', 'claude', 'ollama'];
 
 // diarize: separar as vozes da trilha "Outros" em Participante 1, 2... (só no Gemini, experimental)
 // notifyMeetings: avisar quando uma reunião da Google Agenda começar
+// autoRecordMeetings: começar a gravar sozinho quando uma reunião da agenda começar (parar é manual)
 // ollamaModel: modelo do Ollama para o resumo local ("" = o primeiro instalado)
 // trayHintShown / loginItemConfigured: marcas internas (aviso do ícone já mostrado; "abrir ao
 // ligar o computador" já configurado na primeira vez)
@@ -27,10 +28,11 @@ const DEFAULTS = {
   ollamaModel: '',
   diarize: true,
   notifyMeetings: true,
+  autoRecordMeetings: false,
   trayHintShown: false,
   loginItemConfigured: false,
 };
-const BOOLEANS = ['diarize', 'notifyMeetings', 'trayHintShown', 'loginItemConfigured'];
+const BOOLEANS = ['diarize', 'notifyMeetings', 'autoRecordMeetings', 'trayHintShown', 'loginItemConfigured'];
 
 let file = null;
 let current = { ...DEFAULTS };
