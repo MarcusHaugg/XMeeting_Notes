@@ -45,6 +45,31 @@ export async function run({ app, win, transcriber, setQuitting }) {
     console.log(`[dev] captura de tela: ${name}`);
   };
 
+  if (has('notify-test')) {
+    const { notifyUser } = await import('./popup.js');
+    let clicked = false;
+    const popup = notifyUser({
+      title: 'Sua reunião está começando',
+      body: 'Reunião de teste do aviso',
+      actions: [{ label: 'Dispensar' }, { label: 'Gravar', primary: true, onClick: () => (clicked = true) }],
+      timeoutMs: 0,
+    });
+    await sleep(1500);
+    if (popup?.webContents) {
+      const img = await popup.webContents.capturePage();
+      if (shotDir) fs.writeFileSync(path.join(shotDir, 'aviso.png'), img.toPNG());
+      console.log('[dev] aviso visível:', popup.isVisible(), 'posição:', JSON.stringify(popup.getBounds()));
+      await sleep(Number(value('notify-wait')) || 0); // tempo para uma captura da tela inteira
+      const [w, h] = popup.getContentSize();
+      for (const type of ['mouseDown', 'mouseUp']) popup.webContents.sendInputEvent({ type, x: w - 45, y: h - 26, button: 'left', clickCount: 1 });
+      await sleep(800);
+      console.log('[dev] clicou em Gravar:', clicked, '· aviso fechou:', popup.isDestroyed());
+    }
+    setQuitting();
+    app.exit(0);
+    return;
+  }
+
   if (has('auto-record-test')) {
     const { updateSettings } = await import('./settings.js');
     updateSettings({ autoRecordMeetings: true });

@@ -150,20 +150,22 @@ const notified = new Set();
 
 /**
  * A cada 30 s confere se alguma reunião (com link ou participantes) começa agora e chama
- * onStarting(evento) uma vez por reunião. A lista é atualizada a cada 5 min.
+ * onStarting(evento) uma vez por reunião. A lista é atualizada a cada minuto.
  */
 export function startMeetingWatcher({ onStarting, enabled }) {
   clearInterval(watcher);
   watcher = setInterval(async () => {
     if (!enabled() || !calendarConnected()) return;
     try {
-      const { events } = await listEvents({ days: 1, maxAgeMs: 5 * 60_000 });
+      // Lista de no máximo 1 min: um evento criado em cima da hora precisa aparecer a tempo do aviso.
+      const { events } = await listEvents({ days: 1, maxAgeMs: 60_000 });
       const now = Date.now();
       for (const ev of events) {
         if (ev.allDay || (!ev.link && ev.attendees.length < 2)) continue;
         const start = Date.parse(ev.start);
         const key = `${ev.id}@${ev.start}`;
-        if (start - now > 60_000 || now - start > 2 * 60_000 || notified.has(key)) continue;
+        // De 1 min antes até 5 min depois do início (o computador pode ter acabado de acordar).
+        if (start - now > 60_000 || now - start > 5 * 60_000 || notified.has(key)) continue;
         notified.add(key);
         onStarting(ev);
       }

@@ -5,7 +5,8 @@
 //   ou na hora, pelo botão "Reiniciar e atualizar".
 // - macOS e Linux (.deb): só avisa e abre a página para baixar. O macOS só deixa um app se trocar
 //   sozinho se ele tiver a assinatura da Apple, e o .deb pediria a senha do sistema.
-import { app, Notification, shell } from 'electron';
+import { app, shell } from 'electron';
+import { notifyUser } from './popup.js';
 
 // Tem que ser igual a "build.publish" no package.json (o workflow confere antes de gerar os
 // instaladores). Fica aqui porque o app instalado não leva a configuração do build, e no macOS
@@ -69,11 +70,9 @@ function set(patch) {
 }
 
 function announce(title, body, onClick) {
-  if (announced.has(state.version) || !Notification.isSupported()) return;
+  if (announced.has(state.version)) return;
   announced.add(state.version);
-  const n = new Notification({ title, body });
-  n.on('click', onClick);
-  n.show();
+  notifyUser({ title, body, onClick, timeoutMs: 30_000 });
 }
 
 /**

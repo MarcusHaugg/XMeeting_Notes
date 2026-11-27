@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, nativeTheme, Notification, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, nativeTheme, powerSaveBlocker, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,7 @@ import { calendarConnected, clearCalendarCache, listEvents, startMeetingWatcher,
 import { canOpenAtLogin, createTray, hasTray, opensAtLogin, refreshTray, setOpenAtLogin, startedAtLogin } from './tray.js';
 import { checkForUpdate, initUpdater, installUpdate, updateState } from './updater.js';
 import { configProblem } from './config.js';
+import { notifyUser } from './popup.js';
 import { exportAudioFile, finalizeAudio, probeDuration } from './media.js';
 import { Summarizer } from './summarizer.js';
 import { Transcriber } from './transcriber.js';
@@ -199,14 +200,14 @@ function onWindowClose(event) {
     return;
   }
   win.hide();
-  if (!getSettings().trayHintShown && Notification.isSupported()) {
+  if (!getSettings().trayHintShown) {
     updateSettings({ trayHintShown: true });
-    new Notification({
+    notifyUser({
       title: 'O XMeeting continua aberto',
       body: recording
         ? 'A gravação continua. Abra pelo ícone na barra para parar.'
         : 'Ele fica no ícone da barra para avisar quando suas reuniões começarem. Para fechar de vez, use "Sair" no menu do ícone.',
-    }).show();
+    });
   }
 }
 
@@ -398,22 +399,36 @@ async function findEvent(eventId) {
 // tela (a pessoa pode estar entrando na chamada); parar continua sendo manual. Senão, só avisa:
 // clicar no aviso abre o app e começa a gravar.
 async function announceMeeting(ev) {
-  const notify = (title, body, onClick) => {
-    if (!Notification.isSupported()) return;
-    const n = new Notification({ title, body });
-    if (onClick) n.on('click', onClick);
-    n.show();
-  };
+  const record = () => recordFromOutside(ev.id);
   if (getSettings().autoRecordMeetings && currentUser() && !recording) {
     await runInWindow(`window.__record(${JSON.stringify(ev.id)})`);
     if (recording) {
-      notify(`Gravando: ${ev.title}`, 'O XMeeting começou a gravar sozinho. Avise os participantes. Clique para abrir ou parar.', focusWindow);
+      notifyUser({
+        title: `Gravando: ${ev.title}`,
+        body: 'O XMeeting começou a gravar sozinho. Avise os participantes.',
+        actions: [
+          { label: 'Fechar' },
+          { label: 'Abrir', primary: true, onClick: focusWindow },
+        ],
+        timeoutMs: 20_000,
+      });
       return;
     }
-    notify('Não consegui começar a gravar', `${ev.title}\nClique para tentar de novo.`, () => recordFromOutside(ev.id));
+    notifyUser({
+      title: 'Não consegui começar a gravar',
+      body: ev.title,
+      actions: [{ label: 'Dispensar' }, { label: 'Tentar de novo', primary: true, onClick: record }],
+      timeoutMs: 0,
+    });
     return;
   }
-  if (getSettings().notifyMeetings) notify('Sua reunião está começando', `${ev.title}\nClique para gravar no XMeeting.`, () => recordFromOutside(ev.id));
+  if (!getSettings().notifyMeetings) return;
+  notifyUser({
+    title: 'Sua reunião está começando',
+    body: ev.title,
+    actions: [{ label: 'Dispensar' }, { label: 'Gravar', primary: true, onClick: record }],
+    timeoutMs: 3 * 60_000, // fica na tela até 3 min, para não passar despercebido
+  });
 }
 
 // ---------------------------------------------------------------- gravação
