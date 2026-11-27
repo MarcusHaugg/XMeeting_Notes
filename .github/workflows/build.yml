@@ -2,9 +2,8 @@
 # Cada sistema é compilado na sua própria máquina (o .dmg do macOS só pode ser feito num Mac).
 # Os arquivos ficam em "Artifacts" na página da execução (aba Actions do repositório).
 #
-# Numa versão (tag v*, igual à "version" do package.json), os instaladores são publicados no
-# repositório público de instaladores ("build.publish" no package.json). É de lá que as pessoas
-# baixam e que o app instalado procura as atualizações.
+# Numa versão (tag v*, igual à "version" do package.json), os instaladores dos 3 sistemas também
+# vão juntos para a página de Releases deste repositório.
 name: Build XMeeting Notes
 
 on:
@@ -57,21 +56,11 @@ jobs:
           BACKEND_URL: ${{ vars.XMEETING_BACKEND_URL }}
           COMPANY_DOMAINS: ${{ vars.XMEETING_COMPANY_DOMAINS }}
 
-      # O app procura atualizações no repositório escrito em electron/updater.js; os instaladores
-      # são publicados no de "build.publish". Os dois precisam ser o mesmo.
-      - name: Conferir repositório de atualizações
-        shell: bash
-        run: |
-          repo="$(node -p "const [p] = require('./package.json').build.publish; p.owner + '/' + p.repo")"
-          grep -q "RELEASES_REPO = '$repo'" electron/updater.js || { echo "::error::RELEASES_REPO em electron/updater.js deve ser '$repo' (build.publish do package.json)."; exit 1; }
-
       - name: Gerar instalador
         run: npx electron-builder ${{ matrix.target }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      # latest*.yml e *.blockmap: o que o app instalado lê para saber da versão nova e baixar só
-      # o que mudou.
       - uses: actions/upload-artifact@v4
         with:
           name: XMeeting-Notes-${{ runner.os }}
@@ -80,64 +69,47 @@ jobs:
             dist/*.dmg
             dist/*.AppImage
             dist/*.deb
-            dist/*.blockmap
-            dist/latest*.yml
           if-no-files-found: error
 
-  # Publica uma vez só, depois dos 3 sistemas, para ninguém receber uma versão pela metade.
+  # Publica uma vez só, depois dos 3 sistemas ficarem prontos.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Conferir versão e destino
-        id: target
+      - name: Conferir a versão
         shell: bash
-        env:
-          TOKEN: ${{ secrets.XMEETING_RELEASES_TOKEN }}
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::A tag $GITHUB_REF_NAME não bate com a versão do package.json ($version). O app compararia versões erradas."
+            echo "::error::A tag $GITHUB_REF_NAME não bate com a versão do package.json ($version)."
             exit 1
           fi
-          if [ -z "$TOKEN" ]; then
-            echo "::error::Falta o segredo XMEETING_RELEASES_TOKEN (token com permissão de escrita no repositório de instaladores)."
-            exit 1
-          fi
-          echo "repo=$(node -p "const [p] = require('./package.json').build.publish; p.owner + '/' + p.repo")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Publicar a versão
+      - name: Publicar na Release
         uses: softprops/action-gh-release@v2
         with:
-          repository: ${{ steps.target.outputs.repo }}
-          token: ${{ secrets.XMEETING_RELEASES_TOKEN }}
-          tag_name: ${{ github.ref_name }}
           name: XMeeting Notes ${{ github.ref_name }}
-          make_latest: 'true'
           fail_on_unmatched_files: true
           body: |
-            Baixe o instalador do seu sistema em **Assets**, logo abaixo:
+            Instaladores (em **Assets**, abaixo):
 
-            - **Windows 10/11**: `.exe`
-            - **macOS 14.2+ (Apple Silicon)**: `.dmg`
+            - **Windows 10/11**: `XMeeting-Notes-<versão>-win-x64.exe`
+            - **macOS 14.2+ (Apple Silicon)**: `XMeeting-Notes-<versão>-mac-arm64.dmg`
             - **Linux**: `.AppImage` ou `.deb`
 
-            Quem já tem o app no Windows ou no Linux (AppImage) recebe esta versão sozinho. No macOS,
-            o app avisa e você instala por cima. Suas reuniões e configurações continuam no computador.
+            Para atualizar, instale por cima da versão anterior: reuniões e configurações continuam no computador.
           files: |
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
             dist/*.deb
-            dist/*.blockmap
-            dist/latest*.yml

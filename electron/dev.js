@@ -8,7 +8,6 @@
 //   --fake-user=EMAIL  só com --screenshot: mostra a interface logada, sem sessão real
 //                    (@gmail.com = conta pessoal; outro domínio = conta empresarial), com uma
 //                    agenda de exemplo; --fake-no-calendar mostra a agenda ainda não conectada
-//   --check-update   com --screenshot: procura atualização antes das capturas (só no app empacotado)
 //   --keep           não apaga a reunião de teste no final
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,10 +43,6 @@ export async function run({ app, win, transcriber, setQuitting }) {
   };
 
   if (!demo && !has('selftest')) {
-    if (has('check-update')) {
-      const { checkForUpdate } = await import('./updater.js');
-      console.log('[dev] atualização:', JSON.stringify(await checkForUpdate()));
-    }
     const open = value('open');
     if (open) {
       for (const tab of ['transcript', 'summary']) {
