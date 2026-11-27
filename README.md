@@ -181,7 +181,7 @@ execução → **Artifacts**, ou `npm run dist` no próprio sistema.
 | Sistema | Arquivo | Observações |
 |---|---|---|
 | Windows 10/11 | `XMeeting-Notes-<versão>-win-x64.exe` | Instala para o seu usuário (sem admin) e cria atalho na Área de Trabalho. O Windows pode avisar "editor desconhecido": clique em **Mais informações → Executar assim mesmo**. |
-| macOS 14.2+ (Apple Silicon) | `XMeeting-Notes-<versão>-mac-arm64.dmg` | O app não é assinado pela Apple. Na primeira vez: clique com o botão direito no app → **Abrir**. Se aparecer "danificado", rode `xattr -cr "/Applications/XMeeting Notes.app"`. Na primeira gravação, permita **Microfone** e **Gravação de áudio do sistema**. |
+| macOS 14.2+ (Apple Silicon) | `XMeeting-Notes-<versão>-mac-arm64.dmg` | Arraste para **Aplicativos**. O app não é assinado pela Apple, então na primeira vez o macOS diz que não pôde verificá-lo: clique em **OK** (não em "Mover para o Lixo"), abra **Ajustes do Sistema → Privacidade e Segurança**, desça até "XMeeting Notes foi bloqueado" e clique em **Abrir Mesmo Assim**. Ou, no Terminal: `xattr -dr com.apple.quarantine "/Applications/XMeeting Notes.app"`. Na primeira gravação, permita **Microfone** e **Gravação de áudio do sistema**. |
 | Linux (x64) | `.AppImage` ou `.deb` | AppImage: `chmod +x` e execute (pode precisar do pacote `libfuse2`). `.deb`: `sudo apt install ./arquivo.deb`. |
 
 ### Atualizações
