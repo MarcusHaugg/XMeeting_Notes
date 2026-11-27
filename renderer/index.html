@@ -32,6 +32,7 @@
       </button>
       <input id="search" class="search" type="search" placeholder="Buscar reuniões" aria-label="Buscar reuniões">
       <nav id="list" class="list" aria-label="Reuniões"></nav>
+      <button id="update-banner" class="update-banner" hidden></button>
       <button id="open-settings" class="side-link">
         <span class="account" id="account-label"></span>
         <span>Configurações</span>
@@ -92,7 +93,11 @@
         </label>
         <p class="hint">Fechar a janela não encerra o app: ele fica no ícone da barra para avisar das reuniões.
           Para fechar de vez, use "Sair do XMeeting" no menu do ícone.</p>
-        <p class="hint" id="set-version"></p>
+        <div class="update-row">
+          <span id="set-version" class="small"></span>
+          <button type="button" id="set-update" class="btn small" hidden>Procurar atualização</button>
+        </div>
+        <p class="hint" id="set-update-hint" hidden></p>
       </section>
 
       <div class="account-box">

@@ -19,6 +19,7 @@ const EVENTS = new Set([
   'summary:error',
   'auth:changed',
   'recording:force-stop',
+  'update:changed',
 ]);
 
 contextBridge.exposeInMainWorld('api', {
@@ -28,7 +29,6 @@ contextBridge.exposeInMainWorld('api', {
     set: (patch) => invoke('settings:set', patch),
     loginItem: () => invoke('app:login-item'),
     setLoginItem: (enabled) => invoke('app:set-login-item', enabled),
-    version: () => invoke('app:version'),
   },
   auth: {
     get: () => invoke('auth:get'),
@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('api', {
     setKey: (provider, key) => invoke('ai:set-key', provider, key),
     removeKey: (provider) => invoke('ai:remove-key', provider),
     openPage: (provider) => invoke('ai:open-page', provider),
+  },
+  update: {
+    get: () => invoke('update:get'),
+    check: () => invoke('update:check'),
+    install: () => invoke('update:install'),
   },
   meetings: {
     list: () => invoke('meetings:list'),

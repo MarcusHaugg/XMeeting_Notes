@@ -161,18 +161,22 @@ git tag v0.4.1
 git push origin main v0.4.1
 ```
 
-O GitHub Actions gera os instaladores dos 3 sistemas e, quando todos ficam prontos, publica em
-**Releases** deste repositório. A tag precisa ser igual à versão do `package.json`, senão a
-publicação para. Depois, copie os instaladores para a pasta do Drive (veja **Instalar**).
+O GitHub Actions gera os instaladores dos 3 sistemas e, quando todos ficam prontos, publica a versão
+em **Releases** deste repositório. A tag precisa ser igual à versão do `package.json`, senão a
+publicação para. O app instalado procura as versões novas ali, por isso o repositório precisa ser
+**público** (Settings → General → Danger Zone → Change visibility). Se o repositório mudar de nome
+ou de dono, mude `build.publish` no `package.json` e `RELEASES_REPO` em `electron/updater.js`.
 
 A versão anterior à 0.4.0 (gravação + Whisper no computador, sem login) fica no branch `versao-0.2`.
 Para gerar os instaladores dela: **Actions → Build XMeeting Notes → Run workflow**, escolhendo esse branch.
 
 ## Instalar
 
-Os instaladores ficam na pasta do XMeeting no Google Drive da empresa. Eles saem de **Releases**
-neste repositório (ou de **Actions** → execução → **Artifacts**, ou de `npm run dist` no próprio
-sistema). Para o Drive, só estes arquivos:
+Baixe o instalador do seu sistema em
+[github.com/MarcusHaugg/XMeeting_Notes/releases/latest](https://github.com/MarcusHaugg/XMeeting_Notes/releases/latest)
+(ou na pasta do XMeeting no Google Drive da empresa). Só os arquivos da tabela abaixo; os "Source
+code" que o GitHub adiciona não instalam nada. Para testar sem publicar: aba **Actions** → última
+execução → **Artifacts**, ou `npm run dist` no próprio sistema.
 
 | Sistema | Arquivo | Observações |
 |---|---|---|
@@ -180,9 +184,20 @@ sistema). Para o Drive, só estes arquivos:
 | macOS 14.2+ (Apple Silicon) | `XMeeting-Notes-<versão>-mac-arm64.dmg` | O app não é assinado pela Apple. Na primeira vez: clique com o botão direito no app → **Abrir**. Se aparecer "danificado", rode `xattr -cr "/Applications/XMeeting Notes.app"`. Na primeira gravação, permita **Microfone** e **Gravação de áudio do sistema**. |
 | Linux (x64) | `.AppImage` ou `.deb` | AppImage: `chmod +x` e execute (pode precisar do pacote `libfuse2`). `.deb`: `sudo apt install ./arquivo.deb`. |
 
-**Atualizar**: o app não se atualiza sozinho. Baixe a versão nova do Drive e instale por cima da
-anterior; reuniões, anotações, chaves e configurações continuam no computador. A versão instalada
-aparece no fim das **Configurações**.
+### Atualizações
+
+O app instalado procura uma versão nova ao abrir e a cada 4 horas.
+
+- **Windows e Linux (AppImage)**: baixa sozinho em segundo plano e instala quando você fecha o app
+  ("Sair do XMeeting"), ou na hora, em **Reiniciar e atualizar** (aviso na barra lateral, menu do
+  ícone ou Configurações). Durante uma gravação, ele espera.
+- **macOS e Linux (.deb)**: avisa que há versão nova e abre a página para baixar; você instala por
+  cima. O macOS só deixa um app se atualizar sozinho com a assinatura da Apple (conta de
+  desenvolvedor, US$ 99 por ano).
+
+Reuniões, anotações, chaves e configurações continuam no computador em qualquer atualização. Quem
+tem uma versão anterior à 0.4.0 precisa instalar a 0.4.0 uma vez na mão: as versões antigas não
+procuravam atualização.
 
 ## Onde ficam os arquivos
 
@@ -239,4 +254,5 @@ Estrutura: `electron/` (processo principal, login, gravação, ffmpeg, transcri�
 - Separar os participantes da chamada também na transcrição no computador.
 - Importar a transcrição e as anotações do Gemini do próprio Google Meet, quando existirem (sem custo de API).
 - Publicar o servidor no Google Cloud Run e guardar o consumo por usuário num banco.
-- Assinatura de código (remove os avisos de "editor desconhecido" no Windows e no macOS).
+- Assinatura de código (remove os avisos de "editor desconhecido" no Windows e no macOS e permite a
+  atualização sozinha no macOS).

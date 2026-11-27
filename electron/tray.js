@@ -44,6 +44,9 @@ export function refreshTray() {
     recording ? { label: 'Parar gravação', click: actions.stop } : { label: 'Gravar agora', click: actions.record },
     { type: 'separator' },
   ];
+  const update = actions.update?.();
+  if (update?.status === 'ready') template.push({ label: `Reiniciar e atualizar para a versão ${update.version}`, click: actions.installUpdate }, { type: 'separator' });
+  if (update?.status === 'available') template.push({ label: `Baixar a versão ${update.version}`, click: actions.installUpdate }, { type: 'separator' });
   if (canOpenAtLogin()) {
     template.push({ label: 'Abrir ao ligar o computador', type: 'checkbox', checked: opensAtLogin(), click: (item) => setOpenAtLogin(item.checked) });
     template.push({ type: 'separator' });
@@ -53,7 +56,7 @@ export function refreshTray() {
   tray.setToolTip(recording ? 'XMeeting Notes: gravando' : 'XMeeting Notes');
 }
 
-/** actions: { open, record, stop, quit, isRecording } */
+/** actions: { open, record, stop, quit, isRecording, update (estado da atualização), installUpdate } */
 export function createTray(handlers) {
   actions = handlers;
   try {
