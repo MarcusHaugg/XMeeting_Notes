@@ -149,18 +149,63 @@ npm start
 
 `app-config.json` e `server/.env` ficam fora do git. Nos instaladores gerados pelo GitHub Actions,
 o `app-config.json` é montado a partir das variáveis e segredos do repositório (veja
-`.github/workflows/build.yml`).
+`.github/workflows/build.yml`): a variável `XMEETING_GOOGLE_CLIENT_ID` e o segredo
+`XMEETING_GOOGLE_CLIENT_SECRET` (mais `XMEETING_BACKEND_URL` e `XMEETING_COMPANY_DOMAINS` quando o
+servidor da empresa estiver no ar).
+
+### 4. Publicar uma versão
+
+O código fica neste repositório (privado). Os instaladores vão para um repositório **público** só
+com eles, [MarcusHaugg/XMeeting_Notes-releases](https://github.com/MarcusHaugg/XMeeting_Notes-releases):
+é de lá que as pessoas baixam e que o app instalado procura as atualizações.
+
+Uma vez só:
+
+1. Crie o repositório público `XMeeting_Notes-releases` com um README (ele precisa de pelo menos um commit).
+2. Crie um token em [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new):
+   acesso só ao repositório `XMeeting_Notes-releases`, permissão **Contents: Read and write**.
+3. Neste repositório, em **Settings → Secrets and variables → Actions → Secrets**, crie o segredo
+   `XMEETING_RELEASES_TOKEN` com esse token.
+
+A cada versão:
+
+```
+# 1. suba a "version" no package.json (ex.: 0.4.1) e faça o commit
+git tag v0.4.1
+git push origin main v0.4.1
+```
+
+O GitHub Actions gera os 3 instaladores e, quando todos ficam prontos, publica a versão no
+repositório público. A tag precisa ser igual à versão do `package.json`, senão a publicação para.
+Se mudar o repositório público, mude também `RELEASES_REPO` em `electron/updater.js`.
 
 ## Instalar
 
-Os instaladores são gerados automaticamente pelo GitHub Actions (aba **Actions** → última execução →
-**Artifacts**), ou localmente com `npm run dist` no próprio sistema.
+Baixe o instalador do seu sistema em
+[github.com/MarcusHaugg/XMeeting_Notes-releases/releases/latest](https://github.com/MarcusHaugg/XMeeting_Notes-releases/releases/latest).
+(Para testar sem publicar: aba **Actions** deste repositório → última execução → **Artifacts**, ou
+`npm run dist` no próprio sistema.)
 
 | Sistema | Arquivo | Observações |
 |---|---|---|
 | Windows 10/11 | `XMeeting-Notes-<versão>-win-x64.exe` | Instala para o seu usuário (sem admin) e cria atalho na Área de Trabalho. O Windows pode avisar "editor desconhecido": clique em **Mais informações → Executar assim mesmo**. |
 | macOS 14.2+ (Apple Silicon) | `XMeeting-Notes-<versão>-mac-arm64.dmg` | O app não é assinado pela Apple. Na primeira vez: clique com o botão direito no app → **Abrir**. Se aparecer "danificado", rode `xattr -cr "/Applications/XMeeting Notes.app"`. Na primeira gravação, permita **Microfone** e **Gravação de áudio do sistema**. |
 | Linux (x64) | `.AppImage` ou `.deb` | AppImage: `chmod +x` e execute (pode precisar do pacote `libfuse2`). `.deb`: `sudo apt install ./arquivo.deb`. |
+
+### Atualizações
+
+O app instalado procura uma versão nova ao abrir e a cada 4 horas.
+
+- **Windows e Linux (AppImage)**: baixa sozinho em segundo plano e instala quando você fecha o app
+  ("Sair do XMeeting"), ou na hora, em **Reiniciar e atualizar** (aviso na barra lateral, menu do
+  ícone ou Configurações). Durante uma gravação, ele espera.
+- **macOS e Linux (.deb)**: avisa que há versão nova e abre a página para baixar; você instala por
+  cima. O macOS só deixa um app se atualizar sozinho com a assinatura da Apple (conta de
+  desenvolvedor, US$ 99 por ano).
+
+Reuniões, anotações, chaves e configurações continuam no computador em qualquer atualização. Quem
+tem uma versão anterior à 0.4.0 precisa instalar a 0.4.0 uma vez na mão: as versões antigas não
+procuravam atualização.
 
 ## Onde ficam os arquivos
 
@@ -217,4 +262,5 @@ Estrutura: `electron/` (processo principal, login, gravação, ffmpeg, transcri�
 - Separar os participantes da chamada também na transcrição no computador.
 - Importar a transcrição e as anotações do Gemini do próprio Google Meet, quando existirem (sem custo de API).
 - Publicar o servidor no Google Cloud Run e guardar o consumo por usuário num banco.
-- Assinatura de código (remove os avisos de "editor desconhecido" no Windows e no macOS).
+- Assinatura de código (remove os avisos de "editor desconhecido" no Windows e no macOS e permite a
+  atualização sozinha no macOS).

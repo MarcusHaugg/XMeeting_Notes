@@ -21,6 +21,7 @@ import { initModels, modelsStatus } from './local-stt/models.js';
 import { cancelLogin, currentUser, initAuth, login, logout, useFakeUserForScreenshots } from './auth.js';
 import { calendarConnected, clearCalendarCache, listEvents, startMeetingWatcher, useFakeCalendarForScreenshots } from './calendar.js';
 import { canOpenAtLogin, createTray, hasTray, opensAtLogin, refreshTray, setOpenAtLogin, startedAtLogin } from './tray.js';
+import { checkForUpdate, initUpdater, installUpdate, updateState } from './updater.js';
 import { configProblem } from './config.js';
 import { exportAudioFile, finalizeAudio, probeDuration } from './media.js';
 import { Summarizer } from './summarizer.js';
@@ -108,6 +109,21 @@ async function start() {
     stop: () => runInWindow('window.__stop()'),
     quit: requestQuit,
     isRecording: () => Boolean(recording),
+    update: updateState,
+    installUpdate: applyUpdate,
+  });
+  initUpdater({
+    onChange: (state) => {
+      notify('update:changed', state);
+      refreshTray();
+    },
+    canInstallNow: () => {
+      if (recording) return 'Pare a gravação antes de atualizar. A atualização também é instalada quando você fechar o app.';
+      if (transcriber?.busy || summarizer?.running.size) return 'Espere a transcrição ou o resumo terminar para reiniciar e atualizar.';
+      return null;
+    },
+    beforeInstall: () => (quitting = true),
+    install: applyUpdate,
   });
   // Na primeira vez no app instalado, já abre junto com o computador (dá para desligar no menu do ícone).
   if (canOpenAtLogin() && !getSettings().loginItemConfigured) {
@@ -191,6 +207,16 @@ function onWindowClose(event) {
   }
 }
 
+/** Reiniciar e atualizar (aviso, menu do ícone ou interface). Se não der agora, explica o porquê. */
+async function applyUpdate() {
+  const result = await installUpdate();
+  if (!result.ok && result.reason) {
+    focusWindow();
+    dialog.showMessageBox(win, { type: 'info', title: 'XMeeting Notes', message: 'Ainda não dá para atualizar', detail: result.reason });
+  }
+  return result;
+}
+
 /** Sair de verdade (menu do ícone, Cmd+Q): confirma se há gravação, transcrição ou resumo em andamento. */
 function requestQuit() {
   if (quitting) return;
@@ -230,6 +256,10 @@ function registerIpc() {
   handle('settings:set', (patch) => updateSettings(patch));
   handle('app:login-item', () => ({ available: canOpenAtLogin(), enabled: opensAtLogin() }));
   handle('app:set-login-item', (enabled) => ({ available: canOpenAtLogin(), enabled: setOpenAtLogin(enabled) }));
+
+  handle('update:get', () => updateState());
+  handle('update:check', () => checkForUpdate());
+  handle('update:install', () => installUpdate());
 
   handle('auth:get', () => ({ user: currentUser(), problem: configProblem() }));
   handle('ai:status', () => aiStatus());

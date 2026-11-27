@@ -54,6 +54,7 @@
     recording: null, // { id, startedAt, capture, stopping }
     starting: false,
     progress: {}, // id -> { stage, progress, etaSec }
+    update: null, // atualização do app (updater.js: updateState)
   };
   let tickTimer = null;
   let notesTimer = null;
@@ -874,6 +875,50 @@
     }
   }
 
+  // ------------------------------------------------------------ atualização do app
+  const UPDATE_TEXT = {
+    checking: () => 'procurando atualização...',
+    none: () => 'é a versão mais nova',
+    downloading: (u) => `baixando a versão ${u.version}...`,
+    ready: (u) => `versão ${u.version} pronta: é instalada quando você fechar o app`,
+    available: (u) => `versão ${u.version} disponível para baixar`,
+    error: () => 'não consegui procurar atualização agora',
+  };
+
+  function renderUpdate() {
+    const u = state.update;
+    if (!u) return;
+    const banner = $('#update-banner');
+    banner.hidden = !['ready', 'available'].includes(u.status);
+    if (u.status === 'ready') banner.innerHTML = `<strong>Versão ${esc(u.version)} pronta</strong><span>Reiniciar e atualizar</span>`;
+    if (u.status === 'available') banner.innerHTML = `<strong>Nova versão ${esc(u.version)}</strong><span>Baixar ↗</span>`;
+
+    const detail = u.enabled ? UPDATE_TEXT[u.status]?.(u) : 'atualização automática só no app instalado';
+    $('#set-version').textContent = `Versão ${u.current}${detail ? ` · ${detail}` : ''}`;
+    $('#set-version').title = u.status === 'error' ? u.error ?? '' : '';
+    const btn = $('#set-update');
+    btn.hidden = !u.enabled;
+    btn.disabled = ['checking', 'downloading'].includes(u.status);
+    btn.textContent = u.status === 'ready' ? 'Reiniciar e atualizar' : u.status === 'available' ? 'Baixar a versão nova ↗' : 'Procurar atualização';
+    const hint = $('#set-update-hint');
+    hint.hidden = !u.enabled || u.selfInstall;
+    hint.textContent = 'Neste sistema o app avisa quando sai uma versão nova, mas a instalação é feita por você: baixe e instale por cima. Suas reuniões e configurações continuam.';
+  }
+
+  async function updateAction() {
+    try {
+      if (['ready', 'available'].includes(state.update?.status)) {
+        const result = await api.update.install();
+        if (!result.ok && result.reason) toast(result.reason, 'warn', 10000);
+      } else {
+        state.update = await api.update.check();
+        renderUpdate();
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
   // ------------------------------------------------------------ eventos da interface
   $('#new-meeting').addEventListener('click', () => startRecording()); // sem passar o clique como eventId
   $('#search').addEventListener('input', (e) => {
@@ -888,6 +933,8 @@
     fillSettings();
     $('#settings').showModal();
   });
+  $('#update-banner').addEventListener('click', updateAction);
+  $('#set-update').addEventListener('click', updateAction);
   $('#set-language').addEventListener('change', (e) => changeSetting({ language: e.target.value }));
   $('#set-notify').addEventListener('change', (e) => changeSetting({ notifyMeetings: e.target.checked }));
   $('#set-login').addEventListener('change', async (e) => {
@@ -1064,6 +1111,10 @@
     else showLogin('Sua sessão terminou. Entre de novo para continuar.');
   });
   api.on('recording:force-stop', () => stopRecording());
+  api.on('update:changed', (u) => {
+    state.update = u;
+    renderUpdate();
+  });
 
   // Chamados pelo processo principal "como um clique" (aviso de reunião, ícone da barra):
   // o Chromium só libera a captura do áudio do sistema com um gesto do usuário.
@@ -1083,6 +1134,8 @@
   // ------------------------------------------------------------ início
   async function init() {
     state.settings = await api.settings.get();
+    state.update = await api.update.get();
+    renderUpdate();
     const auth = await api.auth.get();
     if (auth.problem) {
       showLogin(`O app não está configurado. ${auth.problem}`);
