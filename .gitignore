@@ -1,2 +1,6 @@
 ﻿node_modules/
 dist/
+# Configuração local (IDs do Google, endereço do servidor) e segredos do backend
+app-config.json
+server/.env
+server/usage.jsonl

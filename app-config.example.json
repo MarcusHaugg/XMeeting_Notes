@@ -1,0 +1,6 @@
+{
+  "googleClientId": "",
+  "googleClientSecret": "",
+  "backendUrl": "http://localhost:8080",
+  "companyDomains": "bimachine.com.br"
+}

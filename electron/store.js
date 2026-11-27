@@ -23,6 +23,7 @@ export const trackPath = (id, track) => path.join(dirOf(id), `${track}.webm`);
 export const audioPath = (id) => path.join(dirOf(id), 'audio.m4a');
 const metaPath = (id) => path.join(dirOf(id), 'meta.json');
 const transcriptPath = (id) => path.join(dirOf(id), 'transcript.json');
+const summaryPath = (id) => path.join(dirOf(id), 'summary.json');
 
 async function writeJsonAtomic(file, data) {
   await fs.writeFile(`${file}.tmp`, JSON.stringify(data, null, 2));
@@ -45,14 +46,26 @@ function withLock(id, fn) {
   return next;
 }
 
-export async function create({ hasSystemAudio }) {
+/** event (opcional): compromisso da Google Agenda de onde a gravação foi iniciada. */
+export async function create({ hasSystemAudio, event = null }) {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   const id = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${crypto.randomBytes(2).toString('hex')}`;
   await fs.mkdir(dirOf(id), { recursive: true });
+  const calendarEvent = event
+    ? {
+        id: event.id,
+        title: event.title,
+        start: event.start,
+        end: event.end,
+        link: event.link?.url ?? null,
+        attendees: (event.attendees ?? []).slice(0, 200).map((a) => ({ name: a.name, email: a.email, self: Boolean(a.self) })),
+      }
+    : null;
   const meta = {
     id,
-    title: `Reunião de ${p(d.getDate())}/${p(d.getMonth() + 1)} às ${p(d.getHours())}:${p(d.getMinutes())}`,
+    calendarEvent,
+    title: event?.title ? event.title.slice(0, 200) : `Reunião de ${p(d.getDate())}/${p(d.getMonth() + 1)} às ${p(d.getHours())}:${p(d.getMinutes())}`,
     createdAt: d.toISOString(),
     endedAt: null,
     durationSec: 0,
@@ -61,6 +74,7 @@ export async function create({ hasSystemAudio }) {
     notes: '',
     error: null,
     transcript: { status: null }, // null | queued | running | done | error
+    summary: { status: null }, // null | running | done | error
   };
   await writeJsonAtomic(metaPath(id), meta);
   return meta;
@@ -72,7 +86,12 @@ export function update(id, patch) {
   return withLock(id, async () => {
     const meta = await readMeta(id);
     if (!meta) throw new Error('Reunião não encontrada.');
-    const next = { ...meta, ...patch, transcript: { ...meta.transcript, ...(patch.transcript ?? {}) } };
+    const next = {
+      ...meta,
+      ...patch,
+      transcript: { ...meta.transcript, ...(patch.transcript ?? {}) },
+      summary: { ...(meta.summary ?? { status: null }), ...(patch.summary ?? {}) },
+    };
     await writeJsonAtomic(metaPath(id), next);
     return next;
   });
@@ -98,6 +117,12 @@ export async function get(id) {
   } catch {
     /* ainda não transcrita */
   }
+  let summaryData = null;
+  try {
+    summaryData = JSON.parse(await fs.readFile(summaryPath(id), 'utf8'));
+  } catch {
+    /* ainda não resumida */
+  }
   let audioUrl = null;
   try {
     const st = await fs.stat(audioPath(id));
@@ -105,13 +130,18 @@ export async function get(id) {
   } catch {
     /* áudio ainda não finalizado */
   }
-  return { ...meta, segments, audioUrl };
+  return { ...meta, summary: meta.summary ?? { status: null }, segments, summaryData, audioUrl };
 }
 
 export const hasTranscript = (id) => existsSync(transcriptPath(id));
+export const hasSummary = (id) => existsSync(summaryPath(id));
 
 export async function saveTranscript(id, segments) {
   await writeJsonAtomic(transcriptPath(id), segments);
+}
+
+export async function saveSummary(id, summary) {
+  await writeJsonAtomic(summaryPath(id), summary);
 }
 
 export async function remove(id) {

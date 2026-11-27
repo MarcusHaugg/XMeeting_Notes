@@ -11,6 +11,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write # para publicar os instaladores na página de Release (só em tags v*)
     strategy:
       fail-fast: false
       matrix:
@@ -32,9 +34,24 @@ jobs:
 
       - name: Instalar dependências
         run: npm ci
+
+      # app-config.json fica fora do git. Configure em Settings → Secrets and variables → Actions:
+      # variáveis XMEETING_GOOGLE_CLIENT_ID, XMEETING_BACKEND_URL, XMEETING_COMPANY_DOMAINS
+      # e o segredo XMEETING_GOOGLE_CLIENT_SECRET.
+      - name: Gerar app-config.json
+        shell: bash
+        run: |
+          node -e "require('fs').writeFileSync('app-config.json', JSON.stringify({
+            googleClientId: process.env.CLIENT_ID || '',
+            googleClientSecret: process.env.CLIENT_SECRET || '',
+            backendUrl: process.env.BACKEND_URL || '',
+            companyDomains: process.env.COMPANY_DOMAINS || ''
+          }, null, 2))"
         env:
-          # O app transcreve no processador; sem isto o Linux baixa ~550 MB de binários CUDA (NVIDIA) inúteis.
-          ONNXRUNTIME_NODE_INSTALL: skip
+          CLIENT_ID: ${{ vars.XMEETING_GOOGLE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.XMEETING_GOOGLE_CLIENT_SECRET }}
+          BACKEND_URL: ${{ vars.XMEETING_BACKEND_URL }}
+          COMPANY_DOMAINS: ${{ vars.XMEETING_COMPANY_DOMAINS }}
 
       - name: Gerar instalador
         run: npx electron-builder ${{ matrix.target }} --publish never
@@ -50,3 +67,15 @@ jobs:
             dist/*.AppImage
             dist/*.deb
           if-no-files-found: error
+
+      # Numa versão (git tag v0.3.0 && git push --tags), os instaladores também vão para a página
+      # de Release do repositório: um link só para baixar, sem precisar entrar em Actions.
+      - name: Publicar na Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb

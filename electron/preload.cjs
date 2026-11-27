@@ -10,13 +10,42 @@ const invoke = async (channel, ...args) => {
   }
 };
 
-const EVENTS = new Set(['meetings:changed', 'transcript:progress', 'transcript:done', 'transcript:error', 'recording:force-stop']);
+const EVENTS = new Set([
+  'meetings:changed',
+  'transcript:progress',
+  'transcript:done',
+  'transcript:error',
+  'summary:done',
+  'summary:error',
+  'auth:changed',
+  'recording:force-stop',
+]);
 
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform, // 'win32' | 'darwin' | 'linux'
   settings: {
     get: () => invoke('settings:get'),
     set: (patch) => invoke('settings:set', patch),
+    loginItem: () => invoke('app:login-item'),
+    setLoginItem: (enabled) => invoke('app:set-login-item', enabled),
+  },
+  auth: {
+    get: () => invoke('auth:get'),
+    login: () => invoke('auth:login'),
+    cancel: () => invoke('auth:cancel'),
+    logout: () => invoke('auth:logout'),
+  },
+  calendar: {
+    list: (options) => invoke('calendar:list', options),
+    connect: () => invoke('calendar:connect'),
+    join: (eventId) => invoke('calendar:join', eventId),
+  },
+  ai: {
+    status: () => invoke('ai:status'),
+    options: () => invoke('ai:options'),
+    setKey: (provider, key) => invoke('ai:set-key', provider, key),
+    removeKey: (provider) => invoke('ai:remove-key', provider),
+    openPage: (provider) => invoke('ai:open-page', provider),
   },
   meetings: {
     list: () => invoke('meetings:list'),
@@ -30,10 +59,14 @@ contextBridge.exposeInMainWorld('api', {
     stop: (id) => invoke('rec:stop', id),
   },
   transcript: {
-    start: (id) => invoke('transcript:start', id),
+    start: (id, options) => invoke('transcript:start', id, options),
     cancel: (id) => invoke('transcript:cancel', id),
     copy: (id) => invoke('transcript:copy', id),
     export: (id) => invoke('transcript:export', id),
+  },
+  summary: {
+    start: (id) => invoke('summary:start', id),
+    copy: (id) => invoke('summary:copy', id),
   },
   exportAudio: (id) => invoke('audio:export', id),
   openFolder: (id) => invoke('folder:open', id),

@@ -1,12 +1,32 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, nativeTheme, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, nativeTheme, Notification, powerSaveBlocker, session, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
+import {
+  aiStatus,
+  forgetKeysOf,
+  initAi,
+  listOllamaModels,
+  OLLAMA_DOWNLOAD_URL,
+  PROVIDERS,
+  removeProviderKey,
+  resolveSummarizer,
+  setProviderKey,
+  SUMMARIZERS,
+  TRANSCRIBERS,
+  transcriberProblem,
+} from './ai.js';
+import { initModels, modelsStatus } from './local-stt/models.js';
+import { cancelLogin, currentUser, initAuth, login, logout, useFakeUserForScreenshots } from './auth.js';
+import { calendarConnected, clearCalendarCache, listEvents, startMeetingWatcher, useFakeCalendarForScreenshots } from './calendar.js';
+import { canOpenAtLogin, createTray, hasTray, opensAtLogin, refreshTray, setOpenAtLogin, startedAtLogin } from './tray.js';
+import { configProblem } from './config.js';
 import { exportAudioFile, finalizeAudio, probeDuration } from './media.js';
+import { Summarizer } from './summarizer.js';
 import { Transcriber } from './transcriber.js';
 import { getSettings, initSettings, updateSettings } from './settings.js';
-import { formatTimestamp, transcriptToText } from './speech.js';
+import { formatTimestamp, summaryToText, transcriptToText } from './speech.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TRACKS = new Set(['mic', 'system']);
@@ -35,6 +55,7 @@ let win = null;
 let recording = null; // { id, streams: { mic, system }, blocker }
 let quitting = false;
 let transcriber = null;
+let summarizer = null;
 
 const notify = (channel, payload) => {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -44,10 +65,13 @@ const safeName = (s) => String(s).replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0,
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
+  app.on('second-instance', () => focusWindow());
+  app.on('activate', () => focusWindow()); // macOS: clique no ícone do Dock
+  // Cmd+Q, "Sair" do Dock, desligar o computador: confirma se houver gravação em andamento.
+  app.on('before-quit', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    requestQuit();
   });
   app.on('window-all-closed', () => app.quit());
   app.whenReady().then(start);
@@ -57,15 +81,47 @@ async function start() {
   const userData = app.getPath('userData');
   store.initStore(userData);
   initSettings(userData);
-  transcriber = new Transcriber({ cacheDir: path.join(userData, 'models'), notify });
+  await initAuth(userData, { onChange: (user) => notify('auth:changed', user) });
+  await initAi(userData);
+  initModels(userData);
+  if (app.commandLine.hasSwitch('screenshot') && app.commandLine.hasSwitch('fake-user')) {
+    const calendar = !app.commandLine.hasSwitch('fake-no-calendar');
+    useFakeUserForScreenshots(app.commandLine.getSwitchValue('fake-user'), { calendar });
+    if (calendar) useFakeCalendarForScreenshots();
+  }
+  startMeetingWatcher({ enabled: () => getSettings().notifyMeetings && !recording, onStarting: announceMeeting });
+  summarizer = new Summarizer({ notify });
+  transcriber = new Transcriber({
+    notify,
+    onDone: (id, { thenSummarize }) => {
+      if (thenSummarize) summarizer.start(id).catch((err) => notify('summary:error', { id, error: err.message }));
+    },
+  });
 
   setupPermissions();
   registerIpc();
-  await resetInterruptedTranscripts();
-  createWindow();
+  await resetInterruptedJobs();
+  createWindow({ hidden: startedAtLogin() });
+  createTray({
+    open: focusWindow,
+    record: () => recordFromOutside(null),
+    stop: () => runInWindow('window.__stop()'),
+    quit: requestQuit,
+    isRecording: () => Boolean(recording),
+  });
+  // Na primeira vez no app instalado, já abre junto com o computador (dá para desligar no menu do ícone).
+  if (canOpenAtLogin() && !getSettings().loginItemConfigured) {
+    setOpenAtLogin(true);
+    updateSettings({ loginItemConfigured: true });
+  }
   finalizeInterruptedRecordings(); // em segundo plano
+  // Apaga o Whisper (até 1 GB) baixado pelas versões anteriores, que não é mais usado.
+  // Os modelos atuais ficam em models/stt e não são tocados.
+  for (const old of ['onnx-community', 'Xenova']) {
+    fs.promises.rm(path.join(userData, 'models', old), { recursive: true, force: true }).catch(() => {});
+  }
 
-  if (app.commandLine.hasSwitch('selftest') || app.commandLine.hasSwitch('demo')) {
+  if (['selftest', 'demo', 'screenshot'].some((s) => app.commandLine.hasSwitch(s))) {
     const dev = await import('./dev.js');
     dev.run({ app, win, transcriber, setQuitting: () => (quitting = true) }).catch((err) => {
       console.error('[dev] falhou:', err);
@@ -90,12 +146,13 @@ function setupPermissions() {
   });
 }
 
-function createWindow() {
+function createWindow({ hidden = false } = {}) {
   win = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 860,
     minHeight: 560,
+    show: !hidden, // aberto pelo sistema no login: começa só no ícone da barra
     title: 'XMeeting Notes',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#17181b' : '#f7f6f3',
     autoHideMenuBar: true,
@@ -113,22 +170,47 @@ function createWindow() {
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
+// Fechar a janela só esconde o app: ele continua no ícone da barra (gravando, se estiver) para
+// avisar das reuniões da agenda. Sem ícone (alguns Linux), fechar é sair, como antes.
 function onWindowClose(event) {
   if (quitting) return;
-  const recordingNow = Boolean(recording);
-  if (!recordingNow && !transcriber.busy) return;
-
   event.preventDefault();
+  if (!hasTray()) {
+    requestQuit();
+    return;
+  }
+  win.hide();
+  if (!getSettings().trayHintShown && Notification.isSupported()) {
+    updateSettings({ trayHintShown: true });
+    new Notification({
+      title: 'O XMeeting continua aberto',
+      body: recording
+        ? 'A gravação continua. Abra pelo ícone na barra para parar.'
+        : 'Ele fica no ícone da barra para avisar quando suas reuniões começarem. Para fechar de vez, use "Sair" no menu do ícone.',
+    }).show();
+  }
+}
+
+/** Sair de verdade (menu do ícone, Cmd+Q): confirma se há gravação, transcrição ou resumo em andamento. */
+function requestQuit() {
+  if (quitting) return;
+  const recordingNow = Boolean(recording);
+  if (!recordingNow && !transcriber?.busy && !summarizer?.running.size) {
+    quitting = true;
+    app.quit();
+    return;
+  }
+  focusWindow();
   const choice = dialog.showMessageBoxSync(win, {
     type: 'warning',
     title: 'XMeeting Notes',
     buttons: ['Cancelar', recordingNow ? 'Parar gravação e sair' : 'Sair mesmo assim'],
     defaultId: 0,
     cancelId: 0,
-    message: recordingNow ? 'Uma reunião está sendo gravada.' : 'Uma transcrição está em andamento.',
+    message: recordingNow ? 'Uma reunião está sendo gravada.' : 'Uma transcrição ou um resumo está em andamento.',
     detail: recordingNow
       ? 'Ao sair, a gravação é encerrada e o áudio gravado até agora fica salvo.'
-      : 'Ela será interrompida. Você pode transcrever de novo depois.',
+      : 'O processo será interrompido. Você pode pedir de novo depois.',
   });
   if (choice !== 1) return;
 
@@ -146,6 +228,45 @@ function registerIpc() {
 
   handle('settings:get', () => getSettings());
   handle('settings:set', (patch) => updateSettings(patch));
+  handle('app:login-item', () => ({ available: canOpenAtLogin(), enabled: opensAtLogin() }));
+  handle('app:set-login-item', (enabled) => ({ available: canOpenAtLogin(), enabled: setOpenAtLogin(enabled) }));
+
+  handle('auth:get', () => ({ user: currentUser(), problem: configProblem() }));
+  handle('ai:status', () => aiStatus());
+  handle('ai:options', () => aiOptions());
+  handle('ai:set-key', (provider, key) => setProviderKey(provider, key));
+  handle('ai:remove-key', (provider) => removeProviderKey(provider));
+  handle('ai:open-page', (provider) => {
+    const url = provider === 'ollama' ? OLLAMA_DOWNLOAD_URL : PROVIDERS[provider]?.keysUrl;
+    if (url) return shell.openExternal(url);
+  });
+  handle('auth:login', async () => {
+    const user = await login();
+    focusWindow(); // volta do navegador para o app
+    return user;
+  });
+  handle('auth:cancel', () => cancelLogin());
+  handle('auth:logout', async () => {
+    if (recording) throw new Error('Pare a gravação antes de sair da conta.');
+    await forgetKeysOf(); // as chaves de IA são da conta que está saindo
+    clearCalendarCache();
+    await logout();
+  });
+
+  handle('calendar:list', async ({ refresh = false } = {}) => listEvents({ days: 7, maxAgeMs: refresh ? 0 : 60_000 }));
+  // Conectar a agenda = fazer o login de novo, agora com a permissão da agenda marcada.
+  handle('calendar:connect', async () => {
+    if (recording) throw new Error('Pare a gravação antes de conectar a agenda.');
+    clearCalendarCache();
+    await login();
+    focusWindow();
+    return { connected: calendarConnected() };
+  });
+  handle('calendar:join', async (eventId) => {
+    const ev = await findEvent(eventId);
+    if (!ev?.link || !/^https:\/\//.test(ev.link.url)) throw new Error('Este compromisso não tem link de chamada.');
+    await shell.openExternal(ev.link.url);
+  });
 
   handle('meetings:list', () => store.list());
   handle('meetings:get', (id) => store.get(id));
@@ -158,6 +279,7 @@ function registerIpc() {
   handle('meetings:remove', async (id) => {
     if (recording?.id === id) throw new Error('Pare a gravação antes de excluir esta reunião.');
     if (transcriber.isActive(id)) throw new Error('Cancele a transcrição antes de excluir esta reunião.');
+    if (summarizer.isActive(id)) throw new Error('Espere o resumo terminar antes de excluir esta reunião.');
     await store.remove(id);
   });
 
@@ -165,22 +287,97 @@ function registerIpc() {
   ipcMain.on('rec:chunk', (_event, id, track, data) => writeChunk(id, track, data));
   handle('rec:stop', stopRecording);
 
-  handle('transcript:start', (id) => transcriber.enqueue(id));
+  handle('transcript:start', (id, options = {}) => {
+    requireLogin();
+    return transcriber.enqueue(id, { thenSummarize: Boolean(options.thenSummarize) });
+  });
   handle('transcript:cancel', (id) => transcriber.cancel(id));
   handle('transcript:copy', async (id) => clipboard.writeText(await transcriptText(id)));
   handle('transcript:export', exportTranscript);
+
+  handle('summary:start', (id) => {
+    requireLogin();
+    return summarizer.start(id);
+  });
+  handle('summary:copy', async (id) => {
+    const m = await store.get(id);
+    if (!m?.summaryData) throw new Error('Esta reunião ainda não foi resumida.');
+    clipboard.writeText(`${m.title}\n${new Date(m.createdAt).toLocaleString('pt-BR')}\n\n${summaryToText(m.summaryData)}\n`);
+  });
 
   handle('audio:export', exportAudio);
   handle('folder:open', (id) => shell.openPath(store.dirOf(id)));
   handle('folder:open-data', () => shell.openPath(app.getPath('userData')));
 }
 
+/** O que a tela de Configurações mostra: opções de transcrição e de resumo, e se estão disponíveis. */
+async function aiOptions() {
+  const { summarizer, ollamaModel } = getSettings();
+  const models = modelsStatus();
+  const ollamaModels = await listOllamaModels();
+  const transcribers = Object.entries(TRANSCRIBERS).map(([key, t]) => ({
+    key,
+    label: t.label,
+    problem: transcriberProblem(key),
+    model: key === 'local-fast' ? models.fast : key === 'local-quality' ? models.quality : null,
+  }));
+  const summarizers = [];
+  for (const [key, s] of Object.entries(SUMMARIZERS)) {
+    summarizers.push({ key, label: s.label, available: Boolean(await resolveSummarizer(key, ollamaModel)) });
+  }
+  const current = await resolveSummarizer(summarizer, ollamaModel);
+  return { transcribers, summarizers, currentSummarizer: current?.label ?? null, ollamaModels: ollamaModels.map((m) => m.name) };
+}
+
+function requireLogin() {
+  if (!currentUser()) throw new Error('Entre com sua conta Google para continuar.');
+}
+
+function focusWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  app.focus({ steal: true });
+}
+
+// Roda código na interface como se fosse um clique da pessoa: o Chromium só libera a captura do
+// áudio do sistema (getDisplayMedia) com um gesto do usuário. Sem isso, gravar a partir da
+// notificação ou do ícone da barra pegaria só o microfone.
+function runInWindow(code) {
+  if (!win || win.isDestroyed()) return Promise.resolve();
+  return win.webContents.executeJavaScript(code, true).catch((err) => console.warn('Falha ao acionar a interface:', err.message));
+}
+
+function recordFromOutside(eventId) {
+  focusWindow();
+  if (!recording) runInWindow(`window.__record(${JSON.stringify(eventId ?? null)})`);
+}
+
+// ---------------------------------------------------------------- agenda
+
+async function findEvent(eventId) {
+  if (!eventId) return null;
+  const { events } = await listEvents({ days: 7, maxAgeMs: 10 * 60_000 });
+  return events.find((e) => e.id === eventId) ?? null;
+}
+
+// Aviso do sistema quando uma reunião da agenda começa; clicar nele abre o app e começa a gravar.
+function announceMeeting(ev) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title: 'Sua reunião está começando', body: `${ev.title}\nClique para gravar no XMeeting.` });
+  n.on('click', () => recordFromOutside(ev.id));
+  n.show();
+}
+
 // ---------------------------------------------------------------- gravação
 
-async function startRecording({ hasSystemAudio } = {}) {
+async function startRecording({ hasSystemAudio, eventId } = {}) {
+  requireLogin();
   if (recording) throw new Error('Já existe uma gravação em andamento.');
-  const meta = await store.create({ hasSystemAudio });
+  const event = await findEvent(eventId).catch(() => null); // sem internet: grava sem os dados da agenda
+  const meta = await store.create({ hasSystemAudio, event });
   recording = { id: meta.id, streams: {}, blocker: powerSaveBlocker.start('prevent-app-suspension') };
+  refreshTray();
   return meta;
 }
 
@@ -202,6 +399,7 @@ async function stopRecording(id) {
   if (!recording || recording.id !== id) throw new Error('Nenhuma gravação em andamento.');
   const current = recording;
   recording = null;
+  refreshTray();
   await Promise.all(Object.values(current.streams).map((s) => new Promise((resolve) => s.end(resolve))));
   powerSaveBlocker.stop(current.blocker);
   await store.update(id, { status: 'finalizing', endedAt: new Date().toISOString() });
@@ -225,13 +423,20 @@ async function finalizeMeeting(id) {
   notify('meetings:changed');
 }
 
-async function resetInterruptedTranscripts() {
+async function resetInterruptedJobs() {
   for (const m of await store.list()) {
     if (m.transcript?.status === 'queued' || m.transcript?.status === 'running') {
       await store.update(m.id, {
         transcript: store.hasTranscript(m.id)
           ? { status: 'done', error: null }
           : { status: 'error', error: 'A transcrição foi interrompida porque o app foi fechado. Clique em Transcrever para tentar de novo.' },
+      });
+    }
+    if (m.summary?.status === 'running') {
+      await store.update(m.id, {
+        summary: store.hasSummary(m.id)
+          ? { status: 'done', error: null }
+          : { status: 'error', error: 'O resumo foi interrompido porque o app foi fechado. Clique em Resumir para tentar de novo.' },
       });
     }
   }

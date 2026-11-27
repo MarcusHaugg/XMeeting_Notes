@@ -1,6 +1,6 @@
 // Funções puras de áudio/texto usadas pela transcrição (sem dependência do Electron).
 
-export const SAMPLE_RATE = 16000; // PCM Int16 mono, o formato que o Whisper espera
+export const SAMPLE_RATE = 16000; // PCM Int16 mono
 export const FRAME = 480; // 30 ms
 
 const sec = (s) => Math.round((s * 1000) / 30); // segundos → frames de 30 ms
@@ -8,11 +8,9 @@ const sec = (s) => Math.round((s * 1000) / 30); // segundos → frames de 30 ms
 const MIN_SPEECH_FRAMES = sec(0.25);
 const MERGE_GAP_FRAMES = sec(1.2); // pausas naturais de até ~1,2 s ficam como estão
 const PAD_FRAMES = sec(0.4); // folga generosa: não corta o começo/fim das palavras
-const MAX_WINDOW_FRAMES = sec(28); // o Whisper enxerga 30 s por vez
-const SPLIT_SEARCH_FRAMES = sec(6); // corta falas longas no ponto mais silencioso dos últimos ~6 s
-// Silêncio inserido entre trechos colados. Fica em 0: testado com 1 s, o silêncio digital
-// puro fez o Whisper alucinar ("de um vídeo de um vídeo...") e entrar em loop.
-const GAP_FRAMES = 0;
+// O Gemini Transcribe aceita até 30 min por pedido com horário por palavra; acima disso
+// descarta o resto sem avisar. 25 min deixa margem.
+export const MAX_CHUNK_SECONDS = 25 * 60;
 
 function frameRms(pcm) {
   const n = Math.floor(pcm.length / FRAME);
@@ -62,116 +60,94 @@ function speechRegions(rms) {
 }
 
 /**
- * Planeja as janelas enviadas ao Whisper (mesma técnica do faster-whisper):
- * os silêncios longos são removidos e os trechos de fala são colados, formando
- * janelas de até ~28 s cheias de fala contínua. O Whisper acerta muito mais com a
- * frase inteira do que com pedacinhos de 1-2 s, não "inventa" texto no silêncio, e
- * como cada chamada custa o mesmo que 30 s de áudio, menos janelas = mais rapidez.
- * Devolve [[[inicio, fim], ...], ...]: cada janela é uma lista de trechos (em frames).
+ * Planeja as partes enviadas ao Gemini: os silêncios longos são removidos (não se paga
+ * por eles) e os trechos com fala são colados em partes de até MAX_CHUNK_SECONDS.
+ * Devolve [[[inicio, fim], ...], ...]: cada parte é uma lista de trechos (em frames).
  */
-export function planWindows(pcm) {
+export function planChunks(pcm, maxSeconds = MAX_CHUNK_SECONDS) {
   const rms = frameRms(pcm);
   if (rms.length === 0) return [];
-
-  // 1) Falas longas demais para uma janela são quebradas no ponto mais silencioso.
-  const parts = [];
-  for (const [a, b] of speechRegions(rms)) {
-    let s = a;
-    while (b - s > MAX_WINDOW_FRAMES) {
-      let cut = s + MAX_WINDOW_FRAMES;
-      let best = Infinity;
-      for (let f = s + MAX_WINDOW_FRAMES - SPLIT_SEARCH_FRAMES; f <= s + MAX_WINDOW_FRAMES; f++) {
-        if (rms[f] < best) {
-          best = rms[f];
-          cut = f;
-        }
-      }
-      parts.push([s, cut]);
-      s = cut;
-    }
-    parts.push([s, b]);
-  }
-
-  // 2) Trechos consecutivos são colados (com 1 s de silêncio entre eles) até encher ~28 s.
-  const windows = [];
+  const max = sec(maxSeconds);
+  const chunks = [];
   let current = [];
   let length = 0;
-  for (const [a, b] of parts) {
-    const added = (current.length ? GAP_FRAMES : 0) + (b - a);
-    if (current.length && length + added > MAX_WINDOW_FRAMES) {
-      windows.push(current);
-      current = [];
-      length = 0;
+  for (const region of speechRegions(rms)) {
+    let [a, b] = region;
+    while (a < b) {
+      if (length >= max) {
+        chunks.push(current);
+        current = [];
+        length = 0;
+      }
+      const take = Math.min(b - a, max - length);
+      current.push([a, a + take]);
+      length += take;
+      a += take;
     }
-    length += (current.length ? GAP_FRAMES : 0) + (b - a);
-    current.push([a, b]);
   }
-  if (current.length) windows.push(current);
-  return windows;
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
-/** Tamanho da janela colada, em frames (trechos + silêncios inseridos). */
-export const windowFrames = (parts) => parts.reduce((sum, [a, b]) => sum + (b - a), 0) + GAP_FRAMES * Math.max(0, parts.length - 1);
+/** Duração da parte colada, em frames. */
+export const windowFrames = (parts) => parts.reduce((sum, [a, b]) => sum + (b - a), 0);
 
-/** Em qual trecho colado (índice) cai um horário da janela, em segundos. */
+/** Duração da parte colada, em segundos. */
+export const chunkSeconds = (parts) => (windowFrames(parts) * FRAME) / SAMPLE_RATE;
+
+/** Em qual trecho colado (índice) cai um horário da parte, em segundos. */
 export function windowPartIndex(parts, seconds) {
   const f = (seconds * SAMPLE_RATE) / FRAME;
   let cum = 0;
   for (let i = 0; i < parts.length; i++) {
-    if (i > 0) cum += GAP_FRAMES;
     cum += parts[i][1] - parts[i][0];
     if (f < cum) return i;
   }
   return parts.length - 1;
 }
 
-/** Converte um horário dentro da janela colada para o horário real da reunião (segundos). */
+/** Converte um horário dentro da parte colada para o horário real da reunião (segundos). */
 export function windowTimeMapper(parts) {
   const offsets = [];
   let cum = 0;
-  parts.forEach(([a, b], i) => {
-    if (i > 0) cum += GAP_FRAMES;
+  for (const [a, b] of parts) {
     offsets.push({ cum, a, len: b - a });
     cum += b - a;
-  });
+  }
   const toSec = (frame) => (frame * FRAME) / SAMPLE_RATE;
   return (seconds) => {
     const f = Math.max(0, Math.min(cum, (seconds * SAMPLE_RATE) / FRAME));
     for (let i = offsets.length - 1; i >= 0; i--) {
       const o = offsets[i];
-      if (f < o.cum) continue;
-      const within = f - o.cum;
-      if (within <= o.len) return toSec(o.a + within);
-      // Caiu no silêncio inserido: vai para o trecho mais próximo.
-      const next = offsets[i + 1];
-      return toSec(next && within - o.len > GAP_FRAMES / 2 ? next.a : o.a + o.len);
+      if (f >= o.cum) return toSec(o.a + Math.min(f - o.cum, o.len));
     }
-    return toSec(offsets[0].a);
+    return toSec(offsets[0]?.a ?? 0);
   };
 }
 
-/** Monta o áudio Float32 de uma janela (trechos colados) e sobe o volume de falas baixas. */
-export function windowToFloat32(pcm, parts) {
+/** Monta o áudio de uma parte (trechos colados) e sobe o volume de falas baixas. */
+export function chunkPcm(pcm, parts) {
   let peak = 0;
   for (const [a, b] of parts) {
-    for (let i = a * FRAME; i < b * FRAME; i++) peak = Math.max(peak, Math.abs(pcm[i]));
+    for (let i = a * FRAME; i < b * FRAME && i < pcm.length; i++) peak = Math.max(peak, Math.abs(pcm[i]));
   }
   const p = peak / 32768;
   const gain = p > 0 && p < 0.3 ? Math.min(8, 0.5 / p) : 1;
-  const out = new Float32Array(windowFrames(parts) * FRAME); // já começa zerado (silêncio)
+  const out = new Int16Array(windowFrames(parts) * FRAME);
   let o = 0;
-  parts.forEach(([a, b], idx) => {
-    if (idx > 0) o += GAP_FRAMES * FRAME;
-    for (let i = a * FRAME; i < b * FRAME; i++) out[o++] = (pcm[i] / 32768) * gain;
-  });
+  for (const [a, b] of parts) {
+    for (let i = a * FRAME; i < b * FRAME; i++) {
+      out[o++] = Math.max(-32768, Math.min(32767, Math.round((pcm[i] ?? 0) * gain)));
+    }
+  }
   return out;
 }
 
 const normWords = (words) => words.join(' ').toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '');
 
-// Em ruído, o Whisper às vezes entra em loop ("oito, oito, oito, ..."). Uma palavra ou
-// frase curta repetida 4+ vezes seguidas vira uma ocorrência só. Repetições naturais
-// ("não, não") ficam intactas.
+// Em ruído, modelos de transcrição às vezes entram em loop ("oito, oito, oito, ...").
+// Uma palavra ou frase curta repetida 4+ vezes seguidas vira uma ocorrência só.
+// Repetições naturais ("não, não") ficam intactas.
 export function collapseRepeats(text) {
   const words = text.split(' ');
   const out = [];
@@ -198,8 +174,46 @@ export function collapseRepeats(text) {
 export function cleanText(raw) {
   const text = collapseRepeats((raw || '').replace(/\s+/g, ' ').trim());
   if (!/\p{L}/u.test(text)) return ''; // só pontuação/símbolos
-  if (/amara\.org/i.test(text)) return ''; // alucinação clássica do Whisper em português
   return text;
+}
+
+const SENTENCE_END = /[.?!…]$/;
+const MAX_WORDS_PER_SEGMENT = 40;
+
+/**
+ * Agrupa as palavras (com horário dentro da parte) em falas, já no horário real da reunião.
+ * Uma fala nova começa quando muda o falante, quando a palavra vem de outro trecho colado
+ * (outro momento da reunião), depois de uma pausa ou no fim de uma frase já longa.
+ */
+export function wordsToSegments(words, parts) {
+  const toReal = windowTimeMapper(parts);
+  const segments = [];
+  let current = null;
+  for (const w of words) {
+    if (!Number.isFinite(w.start)) continue;
+    const part = windowPartIndex(parts, w.start);
+    const start = toReal(w.start);
+    const end = toReal(Number.isFinite(w.end) ? w.end : w.start);
+    const speakerId = w.speaker ?? null;
+    const startsNew =
+      !current ||
+      part !== current.part ||
+      speakerId !== current.speakerId ||
+      start - current.end > 1.0 ||
+      (SENTENCE_END.test(current.text) && current.words >= 12) ||
+      current.words >= MAX_WORDS_PER_SEGMENT;
+    if (startsNew) {
+      current = { part, speakerId, start, end, text: w.text, words: 1 };
+      segments.push(current);
+    } else {
+      current.text += ' ' + w.text;
+      current.end = end;
+      current.words++;
+    }
+  }
+  return segments
+    .map(({ speakerId, start, end, text }) => ({ speakerId, start, end: Math.max(start, end), text: cleanText(text) }))
+    .filter((s) => s.text);
 }
 
 function wordSet(text) {
@@ -225,14 +239,17 @@ function isEcho(micSeg, systemSegs) {
   return false;
 }
 
-/** Junta as trilhas (Você / Outros) numa conversa só, em ordem de tempo. */
+/**
+ * Junta as trilhas (Você / Outros) numa conversa só, em ordem de tempo.
+ * Cada fala pode trazer o próprio falante (ex.: "Participante 2"); senão vale o da trilha.
+ */
 export function mergeTranscript(tracks) {
   const system = tracks.find((t) => t.track === 'system')?.segments ?? [];
   const all = [];
   for (const t of tracks) {
     for (const s of t.segments) {
       if (t.track === 'mic' && isEcho(s, system)) continue;
-      all.push({ ...s, track: t.track, speaker: t.speaker });
+      all.push({ start: s.start, end: s.end, text: s.text, track: t.track, speaker: s.speaker ?? t.speaker });
     }
   }
   all.sort((a, b) => a.start - b.start);
@@ -240,7 +257,7 @@ export function mergeTranscript(tracks) {
   const merged = [];
   for (const s of all) {
     const last = merged.at(-1);
-    if (last && last.track === s.track && s.start - last.end < 2 && s.end - last.start < 60) {
+    if (last && last.track === s.track && last.speaker === s.speaker && s.start - last.end < 2 && s.end - last.start < 60) {
       last.text += ' ' + s.text;
       last.end = s.end;
     } else {
@@ -258,4 +275,23 @@ export function formatTimestamp(seconds) {
 
 export function transcriptToText(segments) {
   return segments.map((s) => `[${formatTimestamp(s.start)}] ${s.speaker}: ${s.text}`).join('\n\n');
+}
+
+export function summaryToText(summary) {
+  const lines = [];
+  if (summary.summary) lines.push('RESUMO', summary.summary, '');
+  if (summary.decisions?.length) lines.push('DECISÕES', ...summary.decisions.map((d) => `- ${d}`), '');
+  if (summary.action_items?.length) {
+    lines.push('PRÓXIMOS PASSOS');
+    for (const a of summary.action_items) {
+      const extra = [a.owner, a.due].filter(Boolean).join(', ');
+      lines.push(`- ${a.task}${extra ? ` (${extra})` : ''}`);
+    }
+    lines.push('');
+  }
+  if (summary.topics?.length) {
+    lines.push('TÓPICOS');
+    for (const t of summary.topics) lines.push(`${t.title}`, ...t.points.map((p) => `- ${p}`));
+  }
+  return lines.join('\n').trim();
 }

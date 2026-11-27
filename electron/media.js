@@ -1,4 +1,5 @@
-// Tudo que envolve ffmpeg: juntar as trilhas no áudio final, decodificar para o Whisper, exportar.
+// Tudo que envolve ffmpeg: juntar as trilhas no áudio final, preparar as partes enviadas
+// para a transcrição, exportar.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,11 +8,16 @@ import ffmpegStatic from 'ffmpeg-static';
 // Num app empacotado o binário fica fora do .asar
 export const FFMPEG = ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
 
-function runFfmpeg(args, { stdout = false } = {}) {
+function runFfmpeg(args, { stdout = false, input = null } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(FFMPEG, ['-hide_banner', '-nostdin', '-loglevel', 'error', ...args], { windowsHide: true });
+    const base = ['-hide_banner', ...(input ? [] : ['-nostdin']), '-loglevel', 'error'];
+    const proc = spawn(FFMPEG, [...base, ...args], { windowsHide: true });
     const chunks = [];
     let stderr = '';
+    if (input) {
+      proc.stdin.on('error', () => {}); // o ffmpeg pode fechar a entrada antes; o erro real vem pelo código de saída
+      proc.stdin.end(input);
+    }
     if (stdout) proc.stdout.on('data', (d) => chunks.push(d));
     proc.stderr.on('data', (d) => {
       stderr = (stderr + d).slice(-8000);
@@ -71,7 +77,19 @@ export function probeDuration(file) {
   });
 }
 
-/** Decodifica uma trilha para PCM Int16 mono 16 kHz (entrada do Whisper). */
+/**
+ * Codifica PCM Int16 mono 16 kHz em MP3 32 kbps. O Gemini reduz todo áudio a 16 kbps e
+ * mono, então mandar mais qualidade só aumenta o envio: 25 min ficam em ~6 MB.
+ */
+export function encodeMp3(int16) {
+  const input = Buffer.from(int16.buffer, int16.byteOffset, int16.byteLength);
+  return runFfmpeg(['-f', 's16le', '-ar', '16000', '-ac', '1', '-i', 'pipe:0', '-c:a', 'libmp3lame', '-b:a', '32k', '-f', 'mp3', 'pipe:1'], {
+    stdout: true,
+    input,
+  });
+}
+
+/** Decodifica uma trilha para PCM Int16 mono 16 kHz, alinhada ao relógio da reunião. */
 export async function decodePcm(file) {
   const buf = await runFfmpeg(['-i', file, '-af', ALIGN, '-ac', '1', '-ar', '16000', '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'], {
     stdout: true,

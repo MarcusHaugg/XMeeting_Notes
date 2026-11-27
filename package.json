@@ -1,9 +1,9 @@
 {
   "name": "xmeeting-notes",
   "productName": "XMeeting Notes",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Gravador de reuniões gratuito e local: grava microfone + áudio do sistema e transcreve a reunião inteira no próprio computador.",
+  "description": "Gravador de reuniões: grava microfone + áudio do sistema, transcreve no computador (ou com Gemini/OpenAI) e resume com a IA escolhida; login Google e Google Agenda.",
   "author": {
     "name": "XMeeting Notes",
     "email": "noreply@xmeetingnotes.app"
@@ -12,6 +12,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "server": "node --env-file-if-exists=server/.env server/index.js",
+    "try-gemini": "node --env-file-if-exists=server/.env server/try-gemini.js",
     "selftest": "electron . --selftest=30",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
@@ -19,8 +21,10 @@
     "dist:linux": "electron-builder --linux --publish never"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.3.2",
-    "ffmpeg-static": "^5.3.0"
+    "@anthropic-ai/sdk": "^1.14.0",
+    "ffmpeg-static": "^5.3.0",
+    "sherpa-onnx-node": "^2.0.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "electron": "^45.5.0",
@@ -37,25 +41,26 @@
     "files": [
       "electron/**",
       "renderer/**",
-      "package.json",
-      "!node_modules/onnxruntime-web/**"
+      "server/gemini.js",
+      "server/errors.js",
+      "server/summary.js",
+      "build/icon.png",
+      "app-config.json",
+      "package.json"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
-      "node_modules/onnxruntime-node/**",
-      "node_modules/sharp/**",
-      "node_modules/@img/**"
+      "node_modules/sherpa-onnx-node/**",
+      "node_modules/sherpa-onnx-*/**"
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
-      ],
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,linux}/**",
-        "!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**"
       ]
     },
     "nsis": {
@@ -70,7 +75,9 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.productivity",
@@ -80,28 +87,25 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "O XMeeting Notes usa o microfone para gravar a sua voz nas reuniões.",
         "NSAudioCaptureUsageDescription": "O XMeeting Notes grava o áudio do sistema para capturar a voz dos outros participantes da reunião."
-      },
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v*/{win32,linux}/**"
-      ]
+      }
     },
     "linux": {
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Office",
-      "maintainer": "XMeeting Notes <noreply@xmeetingnotes.app>",
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v*/{win32,darwin}/**",
-        "!node_modules/onnxruntime-node/bin/napi-v*/linux/arm64/**"
-      ]
+      "maintainer": "XMeeting Notes <noreply@xmeetingnotes.app>"
     }
   }
 }

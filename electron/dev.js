@@ -1,8 +1,13 @@
-// Automação para desenvolvimento (só carregada com --selftest ou --demo).
-//   --selftest=N     grava N segundos de verdade (microfone + sistema) e transcreve
+// Automação para desenvolvimento (só carregada com --selftest, --demo ou --screenshot).
+//   --selftest=N     grava N segundos de verdade (microfone + sistema) e transcreve (precisa de login)
 //   --demo=ID        processa uma reunião já existente na pasta de dados
 //   --no-transcribe  pula a transcrição
-//   --screenshot=DIR salva capturas de tela da interface
+//   --screenshot=DIR salva capturas de tela da interface (sozinho: só a tela inicial;
+//                    com --open=ID: as abas de transcrição e resumo dessa reunião)
+//   --settings       com --screenshot: captura também a janela de Configurações
+//   --fake-user=EMAIL  só com --screenshot: mostra a interface logada, sem sessão real
+//                    (@gmail.com = conta pessoal; outro domínio = conta empresarial), com uma
+//                    agenda de exemplo; --fake-no-calendar mostra a agenda ainda não conectada
 //   --keep           não apaga a reunião de teste no final
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,6 +41,29 @@ export async function run({ app, win, transcriber, setQuitting }) {
     fs.writeFileSync(path.join(shotDir, name), image.toPNG());
     console.log(`[dev] captura de tela: ${name}`);
   };
+
+  if (!demo && !has('selftest')) {
+    const open = value('open');
+    if (open) {
+      for (const tab of ['transcript', 'summary']) {
+        await win.webContents.executeJavaScript(`window.__open(${JSON.stringify(open)}, ${JSON.stringify(tab)})`);
+        await shot(`reuniao-${tab}.png`);
+      }
+    } else {
+      await shot('inicio.png');
+    }
+    if (has('settings')) {
+      await win.webContents.executeJavaScript('window.__settings()');
+      await shot('configuracoes.png');
+      await win.webContents.executeJavaScript("document.querySelector('#settings').scrollTop = 620");
+      await shot('configuracoes-2.png');
+      await win.webContents.executeJavaScript("document.querySelector('#settings').scrollTop = 99999");
+      await shot('configuracoes-3.png');
+    }
+    setQuitting();
+    app.exit(0);
+    return;
+  }
 
   let id;
   if (demo) {

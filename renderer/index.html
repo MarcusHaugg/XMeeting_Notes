@@ -7,13 +7,35 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
+  <div id="login" class="login" hidden>
+    <div class="login-card">
+      <div class="brand">XMeeting Notes</div>
+      <h1>Crie sua conta ou entre</h1>
+      <p class="muted">Use qualquer conta Google. Na primeira vez, sua conta do XMeeting é criada e vinculada a ela.
+        O login abre no seu navegador e volta sozinho para o app.</p>
+      <div id="login-error" class="notice" hidden></div>
+      <button id="login-btn" class="btn primary login-btn">Continuar com Google</button>
+      <div id="login-wait" hidden>
+        <p class="hint">Conclua o login na janela do navegador que abriu.</p>
+        <button id="login-cancel" class="link-btn">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="app" hidden>
     <aside class="sidebar">
       <div class="brand">XMeeting Notes</div>
       <button id="new-meeting" class="new-btn"></button>
+      <button id="open-agenda" class="side-nav">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2v2H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7Zm12 7v10H5V9h14Z"/></svg>
+        Agenda
+      </button>
       <input id="search" class="search" type="search" placeholder="Buscar reuniões" aria-label="Buscar reuniões">
       <nav id="list" class="list" aria-label="Reuniões"></nav>
-      <button id="open-settings" class="side-link">Configurações</button>
+      <button id="open-settings" class="side-link">
+        <span class="account" id="account-label"></span>
+        <span>Configurações</span>
+      </button>
     </aside>
     <main id="main" class="main"></main>
   </div>
@@ -21,20 +43,63 @@
   <div id="rec-bar" class="rec-bar" hidden></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
 
-  <dialog id="settings" class="dialog">
+  <dialog id="settings" class="dialog wide">
     <form method="dialog">
       <h2>Configurações</h2>
-      <label class="field">
-        <span>Qualidade da transcrição</span>
-        <select id="set-model"></select>
-      </label>
-      <p class="hint"><strong>Máxima precisão</strong> acerta bem mais palavras difíceis; 1 h de reunião leva cerca de
-        70 min para transcrever (baixa 1 GB na primeira vez). <strong>Rápido</strong> leva cerca de 40 min, mas erra mais.</p>
-      <label class="field">
-        <span>Idioma das reuniões</span>
-        <select id="set-language"></select>
-      </label>
-      <p class="hint">Fixar o idioma evita que o Whisper confunda idiomas em falas curtas.</p>
+
+      <section class="set-section">
+        <h3>Transcrição</h3>
+        <div id="set-transcribers" class="choices" role="radiogroup" aria-label="Opção de transcrição"></div>
+        <label class="field">
+          <span>Idioma das reuniões</span>
+          <select id="set-language"></select>
+        </label>
+        <p class="hint">Fixar o idioma melhora a transcrição de falas curtas.</p>
+      </section>
+
+      <section class="set-section">
+        <h3>Resumo</h3>
+        <label class="field">
+          <span>Quem faz o resumo</span>
+          <select id="set-summarizer"></select>
+        </label>
+        <p class="hint" id="set-summarizer-hint"></p>
+        <label class="field" id="set-ollama-row" hidden>
+          <span>Modelo do Ollama</span>
+          <select id="set-ollama-model"></select>
+        </label>
+        <p class="hint">O <strong>Ollama</strong> resume no seu computador, sem custo e sem enviar nada, mas com qualidade menor que as IAs na nuvem.
+          <button type="button" class="link-btn inline" data-open-page="ollama">Instalar o Ollama ↗</button></p>
+      </section>
+
+      <section class="set-section">
+        <h3>Chaves de IA</h3>
+        <p class="hint">Assinaturas como ChatGPT Plus, Claude Pro ou o Gemini do Google Workspace <strong>não incluem a API</strong>.
+          Para usar uma IA aqui, gere uma chave de API na conta dela: o consumo vai para essa conta.</p>
+        <p class="notice small" id="set-company" hidden></p>
+        <div id="set-keys" class="keys"></div>
+      </section>
+
+      <section class="set-section">
+        <h3>Agenda e app</h3>
+        <label class="check">
+          <input type="checkbox" id="set-notify">
+          <span>Avisar quando uma reunião da Google Agenda começar</span>
+        </label>
+        <label class="check" id="set-login-row" hidden>
+          <input type="checkbox" id="set-login">
+          <span>Abrir o XMeeting ao ligar o computador</span>
+        </label>
+        <p class="hint">Fechar a janela não encerra o app: ele fica no ícone da barra para avisar das reuniões.
+          Para fechar de vez, use "Sair do XMeeting" no menu do ícone.</p>
+      </section>
+
+      <div class="account-box">
+        <span class="muted small">Conectado como</span>
+        <strong id="set-account"></strong>
+        <span id="set-account-type" class="badge"></span>
+        <button type="button" id="logout" class="btn small">Sair da conta</button>
+      </div>
       <div class="dialog-actions">
         <button type="button" id="open-data" class="btn">Abrir pasta dos arquivos</button>
         <span class="spacer"></span>

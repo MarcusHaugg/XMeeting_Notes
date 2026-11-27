@@ -47,6 +47,10 @@
     tab: 'notes',
     filter: '',
     settings: null,
+    user: null, // { email, name, domain } de quem está logado
+    ai: null, // { account, domain, company, keys: { gemini, openai, claude } (final de cada chave), providers }
+    aiOptions: null, // opções de transcrição/resumo e se estão disponíveis (main.js: aiOptions)
+    agenda: { connected: null, events: [], error: null, loading: false }, // Google Agenda
     recording: null, // { id, startedAt, capture, stopping }
     starting: false,
     progress: {}, // id -> { stage, progress, etaSec }
@@ -88,15 +92,20 @@
       }
       const live = state.recording?.id === m.id;
       const t = m.transcript?.status;
+      const s = m.summary?.status;
       const badge = live
         ? '<span class="badge live">gravando</span>'
-        : t === 'done'
-          ? '<span class="badge ok">transcrita</span>'
-          : t === 'queued' || t === 'running'
-            ? '<span class="badge busy">transcrevendo</span>'
-            : m.status === 'error'
-              ? '<span class="badge err">erro</span>'
-              : '';
+        : t === 'queued' || t === 'running'
+          ? '<span class="badge busy">transcrevendo</span>'
+          : s === 'running'
+            ? '<span class="badge busy">resumindo</span>'
+            : s === 'done'
+              ? '<span class="badge ok">resumida</span>'
+              : t === 'done'
+                ? '<span class="badge ok">transcrita</span>'
+                : m.status === 'error'
+                  ? '<span class="badge err">erro</span>'
+                  : '';
       html += `<button class="list-item${m.id === state.selectedId ? ' active' : ''}" data-id="${esc(m.id)}">
           <span class="li-title">${esc(m.title)}</span>
           <span class="li-meta">${esc(timeLabel(m.createdAt))}${live ? '' : ` · ${esc(fmtDuration(m.durationSec))}`} ${badge}</span>
@@ -105,19 +114,106 @@
     $('#list').innerHTML = html;
   }
 
-  // ------------------------------------------------------------ reunião aberta
-  const EMPTY = `<div class="empty">
-      <svg class="empty-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-2.07A7 7 0 0 0 19 12h-2Z"/></svg>
-      <h1>Grave sua próxima reunião</h1>
-      <p>Quando entrar na chamada (Teams, Meet, Zoom...), clique em <strong>Nova reunião</strong>.
-        O app grava o seu microfone e o som da chamada, e você pode tomar notas enquanto isso.</p>
-      <p>Depois, se quiser, transcreva a reunião inteira: roda no seu PC e nada é enviado para a internet.</p>
-      <ul class="tips">
-        <li>Use fones de ouvido, para a sua voz não se misturar com a dos outros.</li>
-        <li>Teams, Meet e Zoom devem usar os dispositivos de som padrão do Windows.</li>
-      </ul>
-    </div>`;
+  // ------------------------------------------------------------ agenda (tela inicial)
+  const TIPS = `<ul class="tips">
+      <li>Use fones de ouvido, para a sua voz não se misturar com a dos outros.</li>
+      <li>Teams, Meet e Zoom devem usar os dispositivos de som padrão do sistema.</li>
+      <li>Avise os participantes de que a reunião está sendo gravada.</li>
+    </ul>`;
+  const LINK_LABEL = { meet: 'Google Meet', teams: 'Teams', zoom: 'Zoom', link: 'Chamada' };
 
+  async function loadAgenda({ refresh = false } = {}) {
+    if (!state.user) return;
+    state.agenda.loading = true;
+    if (!state.selectedId) renderAgenda();
+    try {
+      const { connected, events } = await api.calendar.list({ refresh });
+      state.agenda = { ...state.agenda, connected, events, error: null };
+    } catch (err) {
+      state.agenda.error = err.message;
+    } finally {
+      state.agenda.loading = false;
+      if (!state.selectedId) renderAgenda();
+    }
+  }
+
+  function agendaDayLabel(iso) {
+    const d = new Date(iso);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (d.toDateString() === tomorrow.toDateString()) return 'Amanhã';
+    return dayLabel(iso);
+  }
+
+  function renderEvent(ev) {
+    const now = Date.now();
+    const start = Date.parse(ev.start);
+    const end = Date.parse(ev.end);
+    const live = !ev.allDay && start - 5 * 60_000 <= now && now < end;
+    const past = !ev.allDay && end <= now;
+    const others = ev.attendees.filter((a) => !a.self).length;
+    const meta = [
+      ev.link ? `<span class="ev-badge">${esc(LINK_LABEL[ev.link.kind] ?? 'Chamada')}</span>` : '',
+      others ? `${others} participante${others > 1 ? 's' : ''}` : '',
+      ev.organizer && others ? `organizado por ${esc(ev.organizer)}` : '',
+    ].filter(Boolean);
+    const canRecord = !past && !ev.allDay && !state.recording;
+    return `<div class="event${live ? ' now' : ''}${past ? ' past' : ''}">
+        <div class="ev-time">${ev.allDay ? 'Dia todo' : `${esc(timeLabel(ev.start))}<br><span>${esc(timeLabel(ev.end))}</span>`}</div>
+        <div class="ev-body">
+          <div class="ev-title" title="${esc(ev.title)}">${esc(ev.title)}</div>
+          <div class="ev-meta">${meta.join('<span>·</span>')}</div>
+        </div>
+        <div class="ev-actions">
+          ${ev.link && !past ? `<button class="btn small" data-action="calendar-join" data-event="${esc(ev.id)}">Entrar</button>` : ''}
+          ${canRecord ? `<button class="btn small${live ? ' primary' : ''}" data-action="calendar-record" data-event="${esc(ev.id)}">Gravar</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function renderAgenda() {
+    renderNav();
+    const a = state.agenda;
+    let body;
+    if (a.connected === null && a.loading) {
+      body = '<p class="muted">Carregando a agenda...</p>';
+    } else if (a.connected === false) {
+      body = `<div class="card center">
+          ${a.error ? `<div class="notice">${esc(a.error)}</div>` : ''}
+          <div class="card-title">Conecte sua Google Agenda</div>
+          <p class="card-sub">Veja as reuniões do dia, grave com um clique (o título e os participantes já vêm preenchidos)
+            e receba um aviso quando a reunião começar. O XMeeting só lê a agenda: não altera nada.</p>
+          <div class="actions"><button class="btn primary" data-action="calendar-connect">Conectar Google Agenda</button></div>
+        </div>`;
+    } else {
+      const days = new Map();
+      for (const ev of a.events) {
+        const key = agendaDayLabel(ev.start);
+        if (!days.has(key)) days.set(key, []);
+        days.get(key).push(ev);
+      }
+      body = a.error ? `<div class="notice">${esc(a.error)}</div>` : '';
+      body += days.size
+        ? [...days].map(([day, evs]) => `<div class="agenda-day">${esc(day)}</div>${evs.map(renderEvent).join('')}`).join('')
+        : '<div class="card center"><p class="muted">Nenhuma reunião na sua agenda nos próximos 7 dias.</p></div>';
+    }
+    $('#main').innerHTML = `<section class="agenda">
+        <header class="agenda-head">
+          <h1>Agenda</h1>
+          <span class="spacer"></span>
+          ${a.connected ? `<button class="btn small" data-action="agenda-refresh"${a.loading ? ' disabled' : ''}>${a.loading ? 'Atualizando...' : 'Atualizar'}</button>` : ''}
+        </header>
+        <p class="muted small">Sem compromisso na agenda? Clique em <strong>Nova reunião</strong> quando entrar na chamada.</p>
+        ${body}
+        ${TIPS}
+      </section>`;
+  }
+
+  function renderNav() {
+    $('#open-agenda').classList.toggle('active', !state.selectedId);
+  }
+
+  // ------------------------------------------------------------ reunião aberta
   async function openMeeting(id) {
     await flushNotes();
     state.selectedId = id;
@@ -130,8 +226,9 @@
   function renderMeeting() {
     const main = $('#main');
     const m = state.meeting;
+    renderNav();
     if (!m) {
-      main.innerHTML = EMPTY;
+      renderAgenda();
       return;
     }
     main.innerHTML = `
@@ -144,16 +241,19 @@
             <button class="link-btn" data-action="open-folder">Abrir pasta</button>
             <button class="link-btn danger" data-action="delete">Excluir</button>
           </div>
+          <div id="m-people" class="people" hidden></div>
           <div id="player" class="player" hidden></div>
         </header>
         <div class="tabs" role="tablist">
           <button role="tab" id="tab-btn-notes" data-tab="notes">Anotações</button>
           <button role="tab" id="tab-btn-transcript" data-tab="transcript">Transcrição</button>
+          <button role="tab" id="tab-btn-summary" data-tab="summary">Resumo</button>
         </div>
         <section id="tab-notes" class="tab-panel" role="tabpanel">
           <textarea id="m-notes" class="notes" placeholder="Escreva suas anotações aqui. Elas são salvas automaticamente."></textarea>
         </section>
         <section id="tab-transcript" class="tab-panel" role="tabpanel" hidden></section>
+        <section id="tab-summary" class="tab-panel" role="tabpanel" hidden></section>
       </article>`;
 
     $('#m-title').value = m.title;
@@ -169,6 +269,7 @@
     renderTabs();
     renderPlayer();
     renderTranscriptPanel();
+    renderSummaryPanel();
   }
 
   async function refreshMeeting() {
@@ -188,6 +289,7 @@
     renderTabs();
     renderPlayer();
     renderTranscriptPanel();
+    renderSummaryPanel();
   }
 
   function renderMeta() {
@@ -197,18 +299,26 @@
     const live = state.recording?.id === m.id;
     const length = live ? 'gravando agora' : m.status === 'finalizing' ? 'salvando o áudio...' : fmtDuration(m.durationSec);
     el.textContent = [dayLabel(m.createdAt), timeLabel(m.createdAt), length, m.hasSystemAudio ? 'microfone + áudio do sistema' : 'só microfone'].join(' · ');
+    const people = (m.calendarEvent?.attendees ?? []).filter((a) => !a.self).map((a) => a.name);
+    const pe = $('#m-people');
+    pe.hidden = people.length === 0;
+    pe.textContent = people.length
+      ? `Da Google Agenda · com ${people.slice(0, 6).join(', ')}${people.length > 6 ? ` e mais ${people.length - 6}` : ''}`
+      : '';
   }
 
   function renderTabs() {
     const m = state.meeting;
-    for (const name of ['notes', 'transcript']) {
+    for (const name of ['notes', 'transcript', 'summary']) {
       const btn = $(`#tab-btn-${name}`);
       if (!btn) return;
       btn.setAttribute('aria-selected', String(state.tab === name));
       $(`#tab-${name}`).hidden = state.tab !== name;
     }
     const t = m.transcript?.status;
+    const s = m.summary?.status;
     $('#tab-btn-transcript').textContent = t === 'done' ? 'Transcrição ✓' : t === 'queued' || t === 'running' ? 'Transcrição…' : 'Transcrição';
+    $('#tab-btn-summary').textContent = s === 'done' ? 'Resumo ✓' : s === 'running' ? 'Resumo…' : 'Resumo';
   }
 
   function renderPlayer() {
@@ -267,7 +377,7 @@
     }
 
     if (t.status === 'done' && m.segments) {
-      const model = state.settings?.models?.[t.model]?.label ?? t.model ?? '';
+      const model = t.engineLabel ?? (t.engine === 'gemini' ? 'Gemini' : t.model ? 'Whisper (versão antiga)' : '');
       const rows = m.segments
         .map(
           (s) => `<div class="seg ${s.track === 'mic' ? 'me' : 'them'}">
@@ -277,7 +387,7 @@
         )
         .join('');
       el.innerHTML = `<div class="toolbar">
-          <span class="muted small">${m.segments.length} falas${model ? ` · modelo ${esc(model)}` : ''}</span>
+          <span class="muted small">${m.segments.length} falas${model ? ` · ${esc(model)}` : ''}</span>
           <span class="spacer"></span>
           <button class="btn small" data-action="copy-transcript">Copiar</button>
           <button class="btn small" data-action="export-transcript">Exportar .txt</button>
@@ -287,15 +397,107 @@
       return;
     }
 
-    const info = state.settings.models[state.settings.model];
-    const estimate = Math.max(1, Math.round((m.durationSec * 0.75 * info.factor) / 60));
+    const engine = state.settings.transcriber;
+    const opt = state.aiOptions?.transcribers.find((o) => o.key === engine);
+    const firstDownload = opt?.model && !opt.model.ready ? `Na primeira vez, baixa o modelo de transcrição (${opt.model.downloadMb} MB).` : '';
     el.innerHTML = `<div class="card center">
         ${t.status === 'error' ? `<div class="notice">${esc(t.error)}</div>` : ''}
+        ${opt?.problem ? `<div class="notice">${esc(opt.problem)}</div>` : ''}
         <div class="card-title">Transcrever a reunião inteira</div>
-        <p class="card-sub">Converte todo o áudio em texto, separando <strong>Você</strong> (microfone) e
-          <strong>Outros</strong> (áudio do sistema). Roda no seu PC: nada é enviado para a internet.</p>
-        <p class="hint">Estimativa: cerca de ${estimate} min com o modelo ${esc(info.label)}.</p>
-        <button class="btn primary" data-action="transcribe">Transcrever</button>
+        <p class="card-sub">Converte todo o áudio em texto, separando <strong>Você</strong> (microfone) e os
+          <strong>Outros</strong> (áudio da chamada). Cada fala vem com o horário.</p>
+        <p class="hint">Opção: <strong>${esc(opt?.label ?? engine)}</strong>. ${esc(ENGINE_INFO[engine] ?? '')} ${esc(firstDownload)}
+          <button class="link-btn inline" data-action="open-settings">trocar</button></p>
+        <div class="actions">
+          <button class="btn primary" data-action="transcribe" ${opt?.problem ? 'disabled' : ''}>Transcrever</button>
+          <button class="btn" data-action="transcribe-and-summarize" ${opt?.problem ? 'disabled' : ''}>Transcrever e resumir</button>
+        </div>
+      </div>`;
+  }
+
+  function renderSummaryPanel() {
+    const el = $('#tab-summary');
+    if (!el) return;
+    const m = state.meeting;
+    const s = m.summary ?? {};
+    const t = m.transcript?.status;
+
+    if (state.recording?.id === m.id || m.status === 'recording' || m.status === 'finalizing') {
+      el.innerHTML = '<div class="card center"><p class="muted">O resumo fica disponível depois que a reunião for transcrita.</p></div>';
+      return;
+    }
+    if (s.status === 'running') {
+      el.innerHTML = `<div class="card">
+          <div class="card-title">Gerando o resumo...</div>
+          <div class="progress indeterminate"><i></i></div>
+          <p class="hint">Costuma levar menos de um minuto.</p>
+        </div>`;
+      return;
+    }
+    if (s.status === 'done' && m.summaryData) {
+      const d = m.summaryData;
+      const list = (items) => `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+      const actions = d.action_items
+        .map((a) => {
+          const who = [a.owner, a.due].filter(Boolean).join(' · ');
+          return `<li>${esc(a.task)}${who ? ` <span class="who">— ${esc(who)}</span>` : ''}</li>`;
+        })
+        .join('');
+      const stale = m.transcript?.finishedAt && s.finishedAt && m.transcript.finishedAt > s.finishedAt;
+      el.innerHTML = `<div class="toolbar">
+          <span class="muted small">Gerado por ${esc(s.provider ?? 'Gemini')}${s.finishedAt ? ` em ${esc(new Date(s.finishedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}` : ''}</span>
+          <span class="spacer"></span>
+          <button class="btn small" data-action="copy-summary">Copiar</button>
+          <button class="btn small" data-action="resummarize">Resumir de novo</button>
+        </div>
+        ${stale ? '<div class="notice">A transcrição mudou depois deste resumo. Clique em Resumir de novo para atualizar.</div>' : ''}
+        <div class="summary">
+          <section><h3>Resumo</h3><p>${esc(d.summary)}</p></section>
+          ${d.decisions.length ? `<section><h3>Decisões</h3>${list(d.decisions)}</section>` : ''}
+          ${actions ? `<section><h3>Próximos passos</h3><ul>${actions}</ul></section>` : ''}
+          ${
+            d.topics.length
+              ? `<section><h3>Tópicos</h3>${d.topics.map((tp) => `<h4>${esc(tp.title)}</h4>${list(tp.points)}`).join('')}</section>`
+              : ''
+          }
+        </div>`;
+      return;
+    }
+
+    if (state.aiOptions && !state.aiOptions.currentSummarizer) {
+      el.innerHTML = `<div class="card center">
+          <div class="card-title">Escolha quem faz o resumo</div>
+          <p class="card-sub">Para resumir, conecte uma chave de IA (Gemini, OpenAI ou Claude) em Configurações, ou instale o
+            Ollama para resumir no seu computador, sem custo.</p>
+          <div class="actions"><button class="btn primary" data-action="open-settings">Abrir Configurações</button></div>
+        </div>`;
+      return;
+    }
+    const error = s.status === 'error' ? `<div class="notice">${esc(s.error)}</div>` : '';
+    if (t !== 'done') {
+      const busy = t === 'queued' || t === 'running';
+      el.innerHTML = `<div class="card center">
+          ${error}
+          <div class="card-title">Resumo da reunião</div>
+          <p class="card-sub">O resumo é feito a partir da transcrição: resumo, decisões, próximos passos e tópicos.</p>
+          <div class="actions">
+            ${
+              busy
+                ? '<p class="hint">A transcrição está em andamento. Depois, é só clicar em Resumir aqui.</p>'
+                : '<button class="btn primary" data-action="transcribe-and-summarize">Transcrever e resumir</button>'
+            }
+          </div>
+        </div>`;
+      return;
+    }
+    el.innerHTML = `<div class="card center">
+        ${error}
+        <div class="card-title">Resumir a reunião</div>
+        <p class="card-sub">Lê a transcrição e as suas anotações e devolve resumo, decisões, próximos passos com responsáveis
+          e os tópicos discutidos.</p>
+        <p class="hint">Vai usar: <strong>${esc(state.aiOptions?.currentSummarizer ?? '')}</strong>
+          <button class="link-btn inline" data-action="open-settings">trocar</button></p>
+        <div class="actions"><button class="btn primary" data-action="summarize">Resumir</button></div>
       </div>`;
   }
 
@@ -345,14 +547,15 @@
         : '<span class="plus">+</span> Nova reunião';
   }
 
-  async function startRecording() {
+  /** eventId (opcional): compromisso da Google Agenda; o título e os participantes vêm dele. */
+  async function startRecording(eventId = null) {
     if (state.recording || state.starting) return;
     state.starting = true;
     updateNewButton();
     let capture = null;
     try {
       capture = await MNRecorder.startCapture();
-      const meta = await api.recording.start({ hasSystemAudio: capture.hasSystemAudio });
+      const meta = await api.recording.start({ hasSystemAudio: capture.hasSystemAudio, eventId });
       capture.start((track, bytes) => api.recording.chunk(meta.id, track, bytes));
       state.recording = { id: meta.id, startedAt: Date.now(), capture, stopping: false };
 
@@ -406,7 +609,9 @@
     updateNewButton();
     await loadList();
     if (state.selectedId === r.id) await refreshMeeting();
-    toast('Reunião salva. Para ter o texto completo, abra a aba Transcrição.');
+    if (!state.selectedId) renderAgenda(); // libera de novo os botões "Gravar"
+    toast('Reunião salva. Para ter o texto e o resumo, abra a aba Transcrição ou Resumo.');
+    if (!state.user) showLogin('Sua sessão terminou. Entre de novo para transcrever e resumir.');
   }
 
   function renderRecBar() {
@@ -449,29 +654,228 @@
   }
 
   // ------------------------------------------------------------ configurações
+  // ------------------------------------------------------------ configurações: transcrição, resumo, chaves
+  const ENGINE_INFO = {
+    'local-fast': 'No seu computador, sem custo e sem enviar nada. Transcreve 1 h de reunião em poucos minutos. Pode errar mais nomes e palavras difíceis.',
+    'local-quality':
+      'No seu computador, sem custo e sem enviar nada. Erra menos, mas demora bem mais: cerca de metade da duração da reunião num computador recente, e mais em computadores antigos. Recomendado quando a precisão importa.',
+    gemini: 'Na nuvem do Google: rápida e precisa, e pode separar os participantes da chamada. Só os trechos com fala são enviados, e apagados de lá depois.',
+    openai: 'Na nuvem da OpenAI: rápida e precisa. Só os trechos com fala são enviados. Custa cerca de US$ 0,27 por hora de reunião, na conta da chave.',
+  };
+  const KEY_INFO = {
+    gemini: {
+      placeholder: 'Cole a chave do Gemini',
+      link: 'Criar chave no Google AI Studio ↗',
+      note: 'Transcreve e resume. Há uma cota gratuita (nela o Google pode usar o conteúdo enviado). O plano pessoal Google AI Pro inclui US$ 10 por mês de crédito de API.',
+    },
+    openai: {
+      placeholder: 'Cole a chave da OpenAI (sk-...)',
+      link: 'Criar chave na OpenAI ↗',
+      note: 'Transcreve e resume. A assinatura do ChatGPT não inclui a API: o uso é pago à parte, com créditos na conta da OpenAI.',
+    },
+    claude: {
+      placeholder: 'Cole a chave do Claude (sk-ant-...)',
+      link: 'Criar chave no Console da Anthropic ↗',
+      note: 'Só resume: a API do Claude não recebe áudio. O Claude Pro não inclui a API; os planos Max e Team incluem créditos mensais, resgatados em claude.ai, em Configurações > Faturamento.',
+    },
+  };
+
+  async function refreshAi() {
+    [state.ai, state.aiOptions] = await Promise.all([api.ai.status(), api.ai.options()]);
+    if ($('#settings').open) renderAiSettings();
+    if (state.meeting) {
+      renderTranscriptPanel();
+      renderSummaryPanel();
+    }
+  }
+
   function fillSettings() {
     const s = state.settings;
-    $('#set-model').innerHTML = Object.entries(s.models)
-      .map(([key, m]) => `<option value="${key}">${esc(m.label)}${key === 'turbo' ? ' (recomendado)' : ''}</option>`)
-      .join('');
-    $('#set-model').value = s.model;
     $('#set-language').innerHTML = Object.entries(s.languages)
       .map(([key, label]) => `<option value="${key}">${esc(label)}</option>`)
       .join('');
     $('#set-language').value = s.language;
+    $('#set-notify').checked = Boolean(s.notifyMeetings);
+    api.settings.loginItem().then(({ available, enabled }) => {
+      $('#set-login-row').hidden = !available; // só no app instalado (Windows e macOS)
+      $('#set-login').checked = enabled;
+    });
+    $('#set-account').textContent = state.user?.email ?? '';
+    $('#set-account-type').textContent = state.user?.domain ? `conta empresarial · ${state.user.domain}` : 'conta pessoal';
+    renderAiSettings();
+    refreshAi(); // atualiza as opções (Ollama aberto, modelos baixados) com a janela aberta
+  }
+
+  function renderAiSettings() {
+    const s = state.settings;
+    const opts = state.aiOptions;
+    const ai = state.ai;
+    if (!opts || !ai) return;
+
+    // Transcrição: as quatro opções, cada uma com o seu aviso
+    $('#set-transcribers').innerHTML = opts.transcribers
+      .map((t) => {
+        const status = t.model
+          ? t.model.ready
+            ? '<div class="choice-status ok">Pronto no computador</div>'
+            : `<div class="choice-status">Na primeira vez, baixa o modelo (${t.model.downloadMb} MB)</div>`
+          : t.problem
+            ? '<div class="choice-status warn">Precisa da chave em "Chaves de IA", abaixo</div>'
+            : '<div class="choice-status ok">Chave conectada</div>';
+        const diarize =
+          t.key === 'gemini'
+            ? `<label class="check"><input type="checkbox" data-setting="diarize" ${s.diarize ? 'checked' : ''}>
+                 <span>Separar os participantes da chamada (experimental: com 3 ou mais pessoas pode trocar quem falou)</span></label>`
+            : '';
+        return `<label class="choice${t.problem ? ' disabled' : ''}">
+            <input type="radio" name="transcriber" value="${t.key}" ${s.transcriber === t.key ? 'checked' : ''} ${t.problem ? 'disabled' : ''}>
+            <span>
+              <div class="choice-title">${esc(t.label)}${t.key === 'local-fast' ? ' <span class="badge">padrão</span>' : ''}</div>
+              <div class="choice-desc">${esc(ENGINE_INFO[t.key] ?? '')}</div>
+              ${status}${diarize}
+            </span>
+          </label>`;
+      })
+      .join('');
+
+    // Resumo
+    $('#set-summarizer').innerHTML = opts.summarizers
+      .map((o) => `<option value="${o.key}" ${o.available || o.key === 'auto' ? '' : 'disabled'}>${esc(o.label)}${o.available || o.key === 'auto' ? '' : ' (indisponível)'}</option>`)
+      .join('');
+    $('#set-summarizer').value = s.summarizer;
+    $('#set-summarizer-hint').textContent = opts.currentSummarizer
+      ? `Vai resumir com: ${opts.currentSummarizer}.${s.summarizer === 'auto' ? ' No Automático, usa a primeira disponível: plano da empresa, Gemini, Claude, OpenAI e, por último, o Ollama.' : ''}`
+      : 'Nenhuma IA disponível para resumir: conecte uma chave abaixo ou instale o Ollama.';
+    $('#set-ollama-row').hidden = opts.ollamaModels.length === 0;
+    $('#set-ollama-model').innerHTML = opts.ollamaModels.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    if (opts.ollamaModels.length) $('#set-ollama-model').value = opts.ollamaModels.includes(s.ollamaModel) ? s.ollamaModel : opts.ollamaModels[0];
+
+    // Chaves de IA
+    $('#set-company').hidden = !ai.company;
+    $('#set-company').textContent = ai.company
+      ? `Sua conta faz parte do plano da empresa (${ai.domain}): o Gemini já está liberado, sem chave.`
+      : '';
+    $('#set-keys').innerHTML = Object.entries(ai.providers)
+      .map(([key, p]) => {
+        const hint = ai.keys[key];
+        const info = KEY_INFO[key];
+        return `<div class="key-item" data-provider="${key}">
+            <div class="key-head">
+              <strong>${esc(p.label)}</strong>
+              <span class="spacer"></span>
+              ${hint ? `<span class="badge ok">conectada ${esc(hint)}</span><button type="button" class="btn small" data-key-remove>Remover</button>` : ''}
+            </div>
+            ${
+              hint
+                ? ''
+                : `<div class="key-row"><input class="key-input" type="password" autocomplete="off" spellcheck="false" data-key-input placeholder="${esc(info.placeholder)}">
+                   <button type="button" class="btn small primary" data-key-save>Conectar</button></div>`
+            }
+            <div class="notice small" data-key-error hidden></div>
+            <p class="hint">${esc(info.note)} <button type="button" class="link-btn inline" data-open-page="${key}">${esc(info.link)}</button></p>
+          </div>`;
+      })
+      .join('');
+  }
+
+  async function saveKey(provider) {
+    const item = $(`#set-keys [data-provider="${provider}"]`);
+    const btn = item.querySelector('[data-key-save]');
+    const error = item.querySelector('[data-key-error]');
+    btn.disabled = true;
+    btn.textContent = 'Conferindo...';
+    error.hidden = true;
+    try {
+      await api.ai.setKey(provider, item.querySelector('[data-key-input]').value);
+      await refreshAi();
+      toast(`Chave do ${state.ai.providers[provider].label} conectada.`);
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+      btn.disabled = false;
+      btn.textContent = 'Conectar';
+    }
+  }
+
+  async function settingsClick(e) {
+    const page = e.target.closest('[data-open-page]');
+    if (page) return api.ai.openPage(page.dataset.openPage);
+    const item = e.target.closest('[data-provider]');
+    if (!item) return;
+    const provider = item.dataset.provider;
+    if (e.target.closest('[data-key-save]')) return saveKey(provider);
+    if (e.target.closest('[data-key-remove]')) {
+      if (!confirm(`Remover a chave do ${state.ai.providers[provider].label} deste computador?`)) return;
+      await api.ai.removeKey(provider);
+      await refreshAi();
+    }
+  }
+
+  async function settingsChange(e) {
+    const t = e.target;
+    if (t.name === 'transcriber') await changeSetting({ transcriber: t.value });
+    else if (t.dataset.setting === 'diarize') await changeSetting({ diarize: t.checked });
+    else if (t.id === 'set-summarizer') await changeSetting({ summarizer: t.value });
+    else if (t.id === 'set-ollama-model') await changeSetting({ ollamaModel: t.value });
+    else return;
+    await refreshAi();
   }
 
   async function changeSetting(patch) {
     try {
       state.settings = await api.settings.set(patch);
-      if (state.meeting) renderTranscriptPanel();
+    } catch (err) {
+      toast(err.message, 'error', 0);
+    }
+  }
+
+  // ------------------------------------------------------------ login
+  function showLogin(error = null) {
+    $('#app').hidden = true;
+    $('#login').hidden = false;
+    $('#login-btn').hidden = false;
+    $('#login-btn').disabled = false;
+    $('#login-wait').hidden = true;
+    $('#login-error').hidden = !error;
+    $('#login-error').textContent = error ?? '';
+  }
+
+  async function showApp(user) {
+    state.user = user;
+    await refreshAi();
+    $('#account-label').textContent = user.email;
+    $('#login').hidden = true;
+    $('#app').hidden = false;
+    updateNewButton();
+    await loadList();
+    renderMeeting();
+    loadAgenda();
+  }
+
+  async function doLogin() {
+    $('#login-btn').disabled = true;
+    $('#login-error').hidden = true;
+    $('#login-wait').hidden = false;
+    try {
+      const user = await api.auth.login();
+      await showApp(user);
+    } catch (err) {
+      showLogin(err.message === 'Login cancelado.' ? null : err.message);
+    }
+  }
+
+  async function doLogout() {
+    if (!confirm('Sair da conta? As reuniões gravadas continuam neste computador.')) return;
+    try {
+      await api.auth.logout();
+      $('#settings').close();
     } catch (err) {
       toast(err.message, 'error', 0);
     }
   }
 
   // ------------------------------------------------------------ eventos da interface
-  $('#new-meeting').addEventListener('click', startRecording);
+  $('#new-meeting').addEventListener('click', () => startRecording()); // sem passar o clique como eventId
   $('#search').addEventListener('input', (e) => {
     state.filter = e.target.value;
     renderList();
@@ -484,9 +888,35 @@
     fillSettings();
     $('#settings').showModal();
   });
-  $('#set-model').addEventListener('change', (e) => changeSetting({ model: e.target.value }));
   $('#set-language').addEventListener('change', (e) => changeSetting({ language: e.target.value }));
+  $('#set-notify').addEventListener('change', (e) => changeSetting({ notifyMeetings: e.target.checked }));
+  $('#set-login').addEventListener('change', async (e) => {
+    const { enabled } = await api.settings.setLoginItem(e.target.checked);
+    e.target.checked = enabled;
+  });
+  $('#open-agenda').addEventListener('click', async () => {
+    await flushNotes();
+    state.selectedId = null;
+    state.meeting = null;
+    renderMeeting();
+    renderList();
+    loadAgenda();
+  });
+  // A agenda se atualiza sozinha a cada 5 min enquanto está na tela.
+  setInterval(() => {
+    if (state.user && !state.selectedId) loadAgenda();
+  }, 5 * 60_000);
   $('#open-data').addEventListener('click', () => api.openDataFolder());
+  $('#logout').addEventListener('click', doLogout);
+  $('#settings').addEventListener('click', settingsClick);
+  $('#settings').addEventListener('change', settingsChange);
+  $('#settings').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.matches('[data-key-input]')) return;
+    e.preventDefault(); // não fecha o diálogo
+    saveKey(e.target.closest('[data-provider]').dataset.provider);
+  });
+  $('#login-btn').addEventListener('click', doLogin);
+  $('#login-cancel').addEventListener('click', () => api.auth.cancel());
 
   $('#rec-bar').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-rec]');
@@ -516,6 +946,32 @@
     }
     const btn = e.target.closest('[data-action]');
     const m = state.meeting;
+    if (btn?.dataset.action.startsWith('calendar-') || btn?.dataset.action === 'agenda-refresh') {
+      try {
+        switch (btn.dataset.action) {
+          case 'calendar-connect':
+            btn.disabled = true;
+            btn.textContent = 'Conclua no navegador...';
+            await api.calendar.connect();
+            state.user = (await api.auth.get()).user ?? state.user;
+            await loadAgenda({ refresh: true });
+            break;
+          case 'agenda-refresh':
+            await loadAgenda({ refresh: true });
+            break;
+          case 'calendar-join':
+            await api.calendar.join(btn.dataset.event);
+            break;
+          case 'calendar-record':
+            await startRecording(btn.dataset.event);
+            break;
+        }
+      } catch (err) {
+        toast(err.message === 'Login cancelado.' ? 'A conexão com a agenda foi cancelada.' : err.message, 'error', 0);
+        if (!state.selectedId) renderAgenda();
+      }
+      return;
+    }
     if (!btn || !m) return;
     try {
       switch (btn.dataset.action) {
@@ -523,10 +979,29 @@
           delete state.progress[m.id];
           await api.transcript.start(m.id);
           break;
+        case 'transcribe-and-summarize':
+          delete state.progress[m.id];
+          await api.transcript.start(m.id, { thenSummarize: true });
+          break;
         case 'retranscribe':
           if (!confirm('Transcrever de novo? A transcrição atual é substituída quando a nova terminar.')) return;
           delete state.progress[m.id];
           await api.transcript.start(m.id);
+          break;
+        case 'summarize':
+          await api.summary.start(m.id);
+          break;
+        case 'resummarize':
+          if (!confirm('Resumir de novo? O resumo atual é substituído pelo novo.')) return;
+          await api.summary.start(m.id);
+          break;
+        case 'copy-summary':
+          await api.summary.copy(m.id);
+          toast('Resumo copiado.');
+          break;
+        case 'open-settings':
+          fillSettings();
+          $('#settings').showModal();
           break;
         case 'cancel-transcript':
           await api.transcript.cancel(m.id);
@@ -576,7 +1051,30 @@
     delete state.progress[id];
     toast(`A transcrição falhou: ${error}`, 'error', 0);
   });
+  api.on('summary:done', ({ id }) => {
+    const m = state.meetings.find((x) => x.id === id);
+    toast(`Resumo pronto${m ? `: ${m.title}` : ''}.`);
+  });
+  api.on('summary:error', ({ error }) => toast(`O resumo falhou: ${error}`, 'error', 0));
+  api.on('auth:changed', (user) => {
+    if (user) return;
+    state.user = null;
+    // Sessão encerrada no meio de uma gravação: a gravação continua e é salva normalmente.
+    if (state.recording) toast('Sua sessão do Google expirou. Termine a gravação e entre de novo.', 'warn', 0);
+    else showLogin('Sua sessão terminou. Entre de novo para continuar.');
+  });
   api.on('recording:force-stop', () => stopRecording());
+
+  // Chamados pelo processo principal "como um clique" (aviso de reunião, ícone da barra):
+  // o Chromium só libera a captura do áudio do sistema com um gesto do usuário.
+  window.__record = async (eventId) => {
+    await ready;
+    if (state.user) await startRecording(eventId ?? null);
+  };
+  window.__stop = async () => {
+    await ready;
+    await stopRecording();
+  };
 
   window.addEventListener('beforeunload', () => {
     if (pendingNotes) flushNotes();
@@ -585,9 +1083,14 @@
   // ------------------------------------------------------------ início
   async function init() {
     state.settings = await api.settings.get();
-    updateNewButton();
-    await loadList();
-    renderMeeting();
+    const auth = await api.auth.get();
+    if (auth.problem) {
+      showLogin(`O app não está configurado. ${auth.problem}`);
+      $('#login-btn').hidden = true;
+      return;
+    }
+    if (auth.user) await showApp(auth.user);
+    else showLogin();
   }
   const ready = init().catch((err) => toast(`Erro ao iniciar: ${err.message}`, 'error', 0));
 
@@ -596,6 +1099,11 @@
     await ready;
     state.tab = tab;
     await openMeeting(id);
+  };
+  window.__settings = async () => {
+    await ready;
+    fillSettings();
+    $('#settings').showModal();
   };
   window.__selftest = async (seconds) => {
     await ready;
