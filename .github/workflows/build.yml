@@ -39,6 +39,10 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      - name: Testes
+        if: runner.os == 'Linux'
+        run: npm test
+
       # app-config.json fica fora do git. Configure em Settings → Secrets and variables → Actions:
       # variáveis XMEETING_GOOGLE_CLIENT_ID, XMEETING_BACKEND_URL, XMEETING_COMPANY_DOMAINS
       # e o segredo XMEETING_GOOGLE_CLIENT_SECRET.

@@ -4,3 +4,4 @@ dist/
 app-config.json
 server/.env
 server/usage.jsonl
+site-pages/
